@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,9 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -26,10 +23,10 @@ func main() {
 		Usage: "Client for Claude Code Runner",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
-				Name:     "transport",
-				Usage:    "Transport type (nats or http)",
-				Value:    "nats",
-				Sources:  cli.EnvVars("TRANSPORT"),
+				Name:    "transport",
+				Usage:   "Transport type (nats or http)",
+				Value:   "nats",
+				Sources: cli.EnvVars("TRANSPORT"),
 			},
 			&cli.StringFlag{
 				Name:     "prompt",
@@ -91,15 +88,15 @@ func run(ctx context.Context, cmd *cli.Command) error {
 
 	switch transport {
 	case "nats":
-		return runNATS(ctx, cmd, req)
+		return runNATS(cmd, req)
 	case "http":
-		return runHTTP(ctx, cmd, req)
+		return runHTTP(cmd, req)
 	default:
 		return fmt.Errorf("unsupported transport: %s", transport)
 	}
 }
 
-func runNATS(ctx context.Context, cmd *cli.Command, req runner.Request) error {
+func runNATS(cmd *cli.Command, req runner.Request) error {
 	natsURL := cmd.String("nats-url")
 	natsCreds := cmd.String("nats-creds")
 	edgeID := cmd.String("edge-id")
@@ -124,56 +121,30 @@ func runNATS(ctx context.Context, cmd *cli.Command, req runner.Request) error {
 
 	topic := "edges." + edgeID + ".claude-runner"
 
-	// Subscribe for result before submitting
-	resultCh := make(chan *runner.Result, 1)
-	sub, err := nc.Subscribe(topic+".results.*", func(msg *nats.Msg) {
-		var result runner.Result
-		if err := json.Unmarshal(msg.Data, &result); err != nil {
-			return
-		}
-		resultCh <- &result
-	})
-	if err != nil {
-		return fmt.Errorf("subscribe: %w", err)
-	}
-	defer sub.Unsubscribe()
-
-	// Submit async run
 	data, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
 
-	resp, err := nc.Request(topic+".async-run", data, 30*time.Second)
+	resp, err := nc.Request(topic+".run", data, 10*time.Minute)
 	if err != nil {
 		return fmt.Errorf("request: %w", err)
 	}
 
-	var asyncResp runner.AsyncRunResponse
-	if err := json.Unmarshal(resp.Data, &asyncResp); err != nil {
+	var result runner.Result
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
 		return fmt.Errorf("unmarshal response: %w", err)
 	}
 
-	fmt.Fprintf(os.Stderr, "Submitted: %s\n", asyncResp.ID)
-
-	// Wait for result
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-
-	select {
-	case result := <-resultCh:
-		if result.Error != "" {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", result.Error)
-		}
-		fmt.Print(result.Output)
-	case sign := <-quit:
-		return fmt.Errorf("interrupted: %s", sign)
+	if result.Error != "" {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", result.Error)
 	}
+	fmt.Print(result.Output)
 
 	return nil
 }
 
-func runHTTP(ctx context.Context, cmd *cli.Command, req runner.Request) error {
+func runHTTP(cmd *cli.Command, req runner.Request) error {
 	endpoint := cmd.String("endpoint")
 	if endpoint == "" {
 		return fmt.Errorf("--endpoint is required for HTTP transport")
@@ -184,9 +155,9 @@ func runHTTP(ctx context.Context, cmd *cli.Command, req runner.Request) error {
 		return err
 	}
 
-	url := strings.TrimRight(endpoint, "/") + "/api/async-run"
+	url := strings.TrimRight(endpoint, "/") + "/api/run"
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
@@ -202,41 +173,15 @@ func runHTTP(ctx context.Context, cmd *cli.Command, req runner.Request) error {
 		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
-	// Parse SSE stream
-	scanner := bufio.NewScanner(resp.Body)
-	var event string
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		if val, ok := strings.CutPrefix(line, "event: "); ok {
-			event = val
-			continue
-		}
-
-		if data, ok := strings.CutPrefix(line, "data: "); ok {
-
-			switch event {
-			case "submitted":
-				var asyncResp runner.AsyncRunResponse
-				if err := json.Unmarshal([]byte(data), &asyncResp); err == nil {
-					fmt.Fprintf(os.Stderr, "Submitted: %s\n", asyncResp.ID)
-				}
-			case "result":
-				var result runner.Result
-				if err := json.Unmarshal([]byte(data), &result); err == nil {
-					if result.Error != "" {
-						fmt.Fprintf(os.Stderr, "Error: %s\n", result.Error)
-					}
-					fmt.Print(result.Output)
-				}
-			case "error":
-				return fmt.Errorf("server error: %s", data)
-			}
-
-			event = ""
-		}
+	var result runner.Result
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decode response: %w", err)
 	}
 
-	return scanner.Err()
+	if result.Error != "" {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", result.Error)
+	}
+	fmt.Print(result.Output)
+
+	return nil
 }

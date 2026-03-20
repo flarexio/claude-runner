@@ -13,12 +13,9 @@ import (
 	"go.uber.org/zap"
 )
 
-type ResultFunc func(*Result)
-
 type Service interface {
 	Close() error
 	Run(ctx context.Context, req Request) (*Result, error)
-	AsyncRun(ctx context.Context, req Request, fn ResultFunc) (string, error)
 }
 
 type ServiceMiddleware func(Service) Service
@@ -63,68 +60,12 @@ func (svc *service) Run(ctx context.Context, req Request) (*Result, error) {
 
 	id := ulid.Make().String()
 
-	return svc.run(ctx, req, id)
-}
-
-func (svc *service) AsyncRun(ctx context.Context, req Request, fn ResultFunc) (string, error) {
-	if req.Prompt == "" {
-		return "", ErrInvalidPrompt
-	}
-
-	id := ulid.Make().String()
-
-	workDir, err := svc.prepareWorkDir(ctx, req, id)
-	if err != nil {
-		return "", err
-	}
-
-	go func() {
-		result, _ := svc.run(context.Background(), req, id)
-		if result == nil {
-			result = &Result{ID: id, Error: "unexpected error"}
-		}
-
-		fn(result)
-
-		svc.log.Info("async run completed",
-			zap.String("id", id),
-			zap.Bool("has_error", result.Error != ""),
-		)
-
-		// cleanup cloned repo
-		if req.Repo != "" {
-			os.RemoveAll(workDir)
-		}
-	}()
-
-	return id, nil
-}
-
-func (svc *service) run(ctx context.Context, req Request, id string) (*Result, error) {
 	workDir, err := svc.prepareWorkDir(ctx, req, id)
 	if err != nil {
 		return nil, err
 	}
 
-	args := []string{"-p", req.Prompt}
-
-	allowedTools := req.AllowedTools
-	if len(allowedTools) == 0 {
-		allowedTools = svc.cfg.AllowedTools
-	}
-
-	if len(allowedTools) > 0 {
-		args = append(args, "--allowedTools", strings.Join(allowedTools, ","))
-	}
-
-	maxTurns := req.MaxTurns
-	if maxTurns == 0 {
-		maxTurns = svc.cfg.MaxTurns
-	}
-
-	if maxTurns > 0 {
-		args = append(args, "--max-turns", fmt.Sprintf("%d", maxTurns))
-	}
+	args := svc.buildArgs(req)
 
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = workDir
@@ -148,6 +89,30 @@ func (svc *service) run(ctx context.Context, req Request, id string) (*Result, e
 	result.Output = stdout.String()
 
 	return result, nil
+}
+
+func (svc *service) buildArgs(req Request) []string {
+	args := []string{"-p", req.Prompt}
+
+	allowedTools := req.AllowedTools
+	if len(allowedTools) == 0 {
+		allowedTools = svc.cfg.AllowedTools
+	}
+
+	if len(allowedTools) > 0 {
+		args = append(args, "--allowedTools", strings.Join(allowedTools, ","))
+	}
+
+	maxTurns := req.MaxTurns
+	if maxTurns == 0 {
+		maxTurns = svc.cfg.MaxTurns
+	}
+
+	if maxTurns > 0 {
+		args = append(args, "--max-turns", fmt.Sprintf("%d", maxTurns))
+	}
+
+	return args
 }
 
 func (svc *service) prepareWorkDir(ctx context.Context, req Request, id string) (string, error) {

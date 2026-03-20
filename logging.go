@@ -30,24 +30,6 @@ func (mw *loggingMiddleware) Close() error {
 	return mw.next.Close()
 }
 
-func (mw *loggingMiddleware) AsyncRun(ctx context.Context, req Request, fn ResultFunc) (string, error) {
-	log := mw.log.With(
-		zap.String("action", "async-run"),
-		zap.String("repo", req.Repo),
-		zap.String("ref", req.Ref),
-	)
-
-	id, err := mw.next.AsyncRun(ctx, req, fn)
-	if err != nil {
-		log.Error(err.Error())
-		return "", err
-	}
-
-	log.Info("async run started", zap.String("id", id))
-
-	return id, nil
-}
-
 func (mw *loggingMiddleware) Run(ctx context.Context, req Request) (*Result, error) {
 	log := mw.log.With(
 		zap.String("action", "run"),

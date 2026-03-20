@@ -95,8 +95,7 @@ func run(ctx context.Context, cmd *cli.Command) error {
 	svc = runner.LoggingMiddleware(logger)(svc)
 
 	endpoints := runner.EndpointSet{
-		Run:      runner.RunEndpoint(svc),
-		AsyncRun: runner.AsyncRunEndpoint(svc),
+		Run: runner.RunEndpoint(svc),
 	}
 
 	// NATS Transport
@@ -132,7 +131,7 @@ func run(ctx context.Context, cmd *cli.Command) error {
 		topic := "edges." + edgeID + ".claude-runner"
 
 		root := srv.AddGroup(topic)
-		natsT.AddEndpoints(root, endpoints, nc, topic)
+		natsT.AddEndpoints(root, endpoints)
 	}
 
 	// HTTP Transport

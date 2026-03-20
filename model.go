@@ -13,4 +13,3 @@ type Config struct {
 	AllowedTools []string `yaml:"allowedTools"`
 	MaxTurns     int      `yaml:"maxTurns"`
 }
-
