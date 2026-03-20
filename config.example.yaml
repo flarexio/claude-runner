@@ -1,0 +1,6 @@
+workDir: ./workspaces
+allowedTools:
+  - Read
+  - Edit
+  - Bash
+maxTurns: 10
