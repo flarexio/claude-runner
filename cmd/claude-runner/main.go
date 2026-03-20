@@ -16,7 +16,7 @@ import (
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 
-	"github.com/flarexio/claude-runner"
+	runner "github.com/flarexio/claude-runner"
 	httpT "github.com/flarexio/claude-runner/transport/http"
 	natsT "github.com/flarexio/claude-runner/transport/nats"
 )
@@ -95,7 +95,7 @@ func run(ctx context.Context, cmd *cli.Command) error {
 	svc = runner.LoggingMiddleware(logger)(svc)
 
 	endpoints := runner.EndpointSet{
-		Run:    runner.RunEndpoint(svc),
+		Run:      runner.RunEndpoint(svc),
 		AsyncRun: runner.AsyncRunEndpoint(svc),
 	}
 
