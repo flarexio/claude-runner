@@ -8,7 +8,8 @@ import (
 )
 
 type EndpointSet struct {
-	Run endpoint.Endpoint
+	Run    endpoint.Endpoint
+	AsyncRun endpoint.Endpoint
 }
 
 type Request struct {
@@ -24,6 +25,31 @@ type Result struct {
 	ID     string `json:"id"`
 	Output string `json:"output"`
 	Error  string `json:"error,omitempty"`
+}
+
+type AsyncRunRequest struct {
+	Request
+	Callback ResultFunc
+}
+
+type AsyncRunResponse struct {
+	ID string `json:"id"`
+}
+
+func AsyncRunEndpoint(svc Service) endpoint.Endpoint {
+	return func(ctx context.Context, request any) (any, error) {
+		req, ok := request.(AsyncRunRequest)
+		if !ok {
+			return nil, errors.New("invalid request type")
+		}
+
+		id, err := svc.AsyncRun(ctx, req.Request, req.Callback)
+		if err != nil {
+			return nil, err
+		}
+
+		return AsyncRunResponse{ID: id}, nil
+	}
 }
 
 func RunEndpoint(svc Service) endpoint.Endpoint {

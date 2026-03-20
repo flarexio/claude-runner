@@ -13,9 +13,12 @@ import (
 	"go.uber.org/zap"
 )
 
+type ResultFunc func(*Result)
+
 type Service interface {
 	Close() error
 	Run(ctx context.Context, req Request) (*Result, error)
+	AsyncRun(ctx context.Context, req Request, fn ResultFunc) (string, error)
 }
 
 type ServiceMiddleware func(Service) Service
@@ -60,6 +63,44 @@ func (svc *service) Run(ctx context.Context, req Request) (*Result, error) {
 
 	id := ulid.Make().String()
 
+	return svc.run(ctx, req, id)
+}
+
+func (svc *service) AsyncRun(ctx context.Context, req Request, fn ResultFunc) (string, error) {
+	if req.Prompt == "" {
+		return "", ErrInvalidPrompt
+	}
+
+	id := ulid.Make().String()
+
+	workDir, err := svc.prepareWorkDir(ctx, req, id)
+	if err != nil {
+		return "", err
+	}
+
+	go func() {
+		result, _ := svc.run(context.Background(), req, id)
+		if result == nil {
+			result = &Result{ID: id, Error: "unexpected error"}
+		}
+
+		fn(result)
+
+		svc.log.Info("async run completed",
+			zap.String("id", id),
+			zap.Bool("has_error", result.Error != ""),
+		)
+
+		// cleanup cloned repo
+		if req.Repo != "" {
+			os.RemoveAll(workDir)
+		}
+	}()
+
+	return id, nil
+}
+
+func (svc *service) run(ctx context.Context, req Request, id string) (*Result, error) {
 	workDir, err := svc.prepareWorkDir(ctx, req, id)
 	if err != nil {
 		return nil, err
