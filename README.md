@@ -118,6 +118,22 @@ claude-runner-client \
   --repo git@github.com:user/repo.git
 ```
 
+## GitHub Action
+
+Use as a step in your workflow to send prompts to a running claude-runner instance:
+
+```yaml
+- uses: flarexio/claude-runner@v1.0.2
+  with:
+    prompt: "Review this code for bugs"
+    repo: ${{ github.server_url }}/${{ github.repository }}.git
+    ref: ${{ github.head_ref }}
+    edge-id: <your-edge-id>
+    nats-creds-content: ${{ secrets.NATS_CREDS }}
+```
+
+Add `NATS_CREDS` (content of `user.creds`) to your repository's **Settings → Secrets → Actions**.
+
 ## API
 
 ### POST /api/run
