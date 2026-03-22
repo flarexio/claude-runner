@@ -25,15 +25,6 @@ func NewService(cfg Config) (Service, error) {
 		zap.String("service", "claude-runner"),
 	)
 
-	if cfg.WorkDir == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			return nil, err
-		}
-
-		cfg.WorkDir = filepath.Join(homeDir, "workspaces")
-	}
-
 	if err := os.MkdirAll(cfg.WorkDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -94,22 +85,12 @@ func (svc *service) Run(ctx context.Context, req Request) (*Result, error) {
 func (svc *service) buildArgs(req Request) []string {
 	args := []string{"-p", req.Prompt}
 
-	allowedTools := req.AllowedTools
-	if len(allowedTools) == 0 {
-		allowedTools = svc.cfg.AllowedTools
+	if len(svc.cfg.AllowedTools) > 0 {
+		args = append(args, "--allowedTools", strings.Join(svc.cfg.AllowedTools, ","))
 	}
 
-	if len(allowedTools) > 0 {
-		args = append(args, "--allowedTools", strings.Join(allowedTools, ","))
-	}
-
-	maxTurns := req.MaxTurns
-	if maxTurns == 0 {
-		maxTurns = svc.cfg.MaxTurns
-	}
-
-	if maxTurns > 0 {
-		args = append(args, "--max-turns", fmt.Sprintf("%d", maxTurns))
+	if svc.cfg.MaxTurns > 0 {
+		args = append(args, "--max-turns", fmt.Sprintf("%d", svc.cfg.MaxTurns))
 	}
 
 	return args

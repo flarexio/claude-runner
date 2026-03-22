@@ -38,13 +38,15 @@ Create config directory at `~/.flarex/claude-runner/` with the following files:
 ### config.yaml
 
 ```yaml
-workDir: ./workspaces
+# workDir: ~/.flarex/claude-runner/workspaces
 allowedTools:
   - Read
   - Edit
   - Bash
 maxTurns: 10
 ```
+
+`workDir` is optional. Defaults to `~/.flarex/claude-runner/workspaces`.
 
 ### id
 
@@ -55,6 +57,17 @@ A plain text file containing the edge node ID.
 NATS credentials file for authentication.
 
 ## Docker
+
+### NATS
+
+```bash
+docker run -d \
+  -v ~/.claude:/root/.claude \
+  -v ~/.flarex/claude-runner:/root/.flarex/claude-runner \
+  flarexio/claude-runner
+```
+
+### HTTP
 
 ```bash
 docker run -d \
@@ -115,9 +128,7 @@ Request:
 {
   "prompt": "Review this code for bugs",
   "repo": "git@github.com:user/repo.git",
-  "ref": "main",
-  "allowed_tools": ["Read", "Edit"],
-  "max_turns": 10
+  "ref": "main"
 }
 ```
 

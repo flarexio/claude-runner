@@ -86,6 +86,10 @@ func run(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
+	if cfg.WorkDir == "" {
+		cfg.WorkDir = filepath.Join(path, "workspaces")
+	}
+
 	svc, err := runner.NewService(cfg)
 	if err != nil {
 		return err
@@ -99,16 +103,11 @@ func run(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// NATS Transport
-	natsURL := cmd.String("nats")
-	natsCreds := filepath.Join(path, "user.creds")
-
 	idBytes, err := os.ReadFile(filepath.Join(path, "id"))
-	if err != nil {
-		return err
-	}
-
-	{
+	if err == nil {
 		edgeID := strings.TrimSpace(string(idBytes))
+		natsURL := cmd.String("nats")
+		natsCreds := filepath.Join(path, "user.creds")
 
 		nc, err := nats.Connect(natsURL,
 			nats.Name("Claude Runner - "+edgeID),
@@ -132,6 +131,8 @@ func run(ctx context.Context, cmd *cli.Command) error {
 
 		root := srv.AddGroup(topic)
 		natsT.AddEndpoints(root, endpoints)
+
+		logger.Info("NATS transport enabled", zap.String("edge_id", edgeID))
 	}
 
 	// HTTP Transport

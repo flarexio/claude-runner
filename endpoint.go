@@ -12,12 +12,10 @@ type EndpointSet struct {
 }
 
 type Request struct {
-	Prompt       string   `json:"prompt"`
-	Repo         string   `json:"repo,omitempty"`
-	Ref          string   `json:"ref,omitempty"`
-	WorkDir      string   `json:"work_dir,omitempty"`
-	AllowedTools []string `json:"allowed_tools,omitempty"`
-	MaxTurns     int      `json:"max_turns,omitempty"`
+	Prompt  string `json:"prompt"`
+	Repo    string `json:"repo,omitempty"`
+	Ref     string `json:"ref,omitempty"`
+	WorkDir string `json:"work_dir,omitempty"`
 }
 
 type Result struct {

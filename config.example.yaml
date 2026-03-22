@@ -1,4 +1,4 @@
-workDir: ./workspaces
+# workDir: ~/.flarexio/claude-runner/workspaces
 allowedTools:
   - Read
   - Edit
