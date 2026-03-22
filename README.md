@@ -54,6 +54,16 @@ A plain text file containing the edge node ID.
 
 NATS credentials file for authentication.
 
+## Docker
+
+```bash
+docker run -d \
+  -v ~/.claude:/root/.claude \
+  -v ~/.flarex/claude-runner:/root/.flarex/claude-runner \
+  -p 8080:8080 \
+  flarexio/claude-runner --http
+```
+
 ## Usage
 
 ### Server
