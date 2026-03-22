@@ -38,11 +38,12 @@ Create config directory at `~/.flarex/claude-runner/` with the following files:
 ### config.yaml
 
 ```yaml
-# workDir: ~/.flarex/claude-runner/workspaces
+# workDir: ~/.flarexio/claude-runner/workspaces
 allowedTools:
-  - Read
-  - Edit
-  - Bash
+- Read
+- Glob
+- Grep
+- Bash
 maxTurns: 10
 ```
 
