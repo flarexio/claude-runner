@@ -1,0 +1,41 @@
+name: Claude Runner
+description: Run Claude Code prompts via claude-runner
+
+inputs:
+  transport:
+    description: Transport type (nats or http)
+    default: nats
+  prompt:
+    description: Prompt to send
+    required: true
+  repo:
+    description: Repository URL
+  ref:
+    description: Git ref (branch, tag)
+  nats-url:
+    description: NATS server URL
+    default: wss://nats.flarex.io
+  nats-creds:
+    description: Path to NATS credentials file
+    default: /tmp/user.creds
+  nats-creds-content:
+    description: NATS credentials file content (from GitHub Secrets)
+  edge-id:
+    description: Edge node ID
+  endpoint:
+    description: HTTP endpoint URL
+
+runs:
+  using: docker
+  image: docker://flarexio/claude-runner-client:1
+  entrypoint: /entrypoint.sh
+  env:
+    INPUT_TRANSPORT: ${{ inputs.transport }}
+    INPUT_PROMPT: ${{ inputs.prompt }}
+    INPUT_REPO: ${{ inputs.repo }}
+    INPUT_REF: ${{ inputs.ref }}
+    INPUT_NATS_URL: ${{ inputs.nats-url }}
+    INPUT_NATS_CREDS: ${{ inputs.nats-creds }}
+    INPUT_NATS_CREDS_CONTENT: ${{ inputs.nats-creds-content }}
+    INPUT_EDGE_ID: ${{ inputs.edge-id }}
+    INPUT_ENDPOINT: ${{ inputs.endpoint }}
