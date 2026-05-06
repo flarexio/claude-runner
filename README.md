@@ -38,7 +38,7 @@ Create config directory at `~/.flarex/claude-runner/` with the following files:
 ### config.yaml
 
 ```yaml
-# workDir: ~/.flarexio/claude-runner/workspaces
+# workDir: ~/.flarex/claude-runner/workspaces
 allowedTools:
 - Read
 - Glob
@@ -48,6 +48,24 @@ maxTurns: 10
 ```
 
 `workDir` is optional. Defaults to `~/.flarex/claude-runner/workspaces`.
+It is a server-side setting and cannot be overridden by client requests.
+
+## Execution Modes
+
+claude-runner supports two workspace modes.
+
+### Existing Workspace Mode
+
+When `repo` is omitted, claude-runner runs `claude -p` directly in the
+configured `workDir`. Use this when the runner is tied to an existing local
+checkout on the server.
+
+### CI Mode
+
+When `repo` is provided, claude-runner treats the request as a CI job. It clones
+the requested repository into `workDir/<run-id>`, optionally checks out `ref`,
+generates pull request diff context when `base-ref` is provided, runs
+`claude -p`, then removes the temporary clone.
 
 ### id
 

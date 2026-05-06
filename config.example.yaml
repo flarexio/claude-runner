@@ -1,4 +1,4 @@
-# workDir: ~/.flarexio/claude-runner/workspaces
+# workDir: ~/.flarex/claude-runner/workspaces
 allowedTools:
 - Read
 - Glob

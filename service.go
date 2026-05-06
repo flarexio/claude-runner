@@ -55,6 +55,13 @@ func (svc *service) Run(ctx context.Context, req Request) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	if req.Repo != "" {
+		defer func() {
+			if err := os.RemoveAll(workDir); err != nil {
+				svc.log.Warn("remove workspace", zap.String("work_dir", workDir), zap.Error(err))
+			}
+		}()
+	}
 
 	var diff string
 	if req.BaseRef != "" {
@@ -172,10 +179,6 @@ func (svc *service) generateDiff(ctx context.Context, req Request, workDir strin
 }
 
 func (svc *service) prepareWorkDir(ctx context.Context, req Request, id string) (string, error) {
-	if req.WorkDir != "" {
-		return req.WorkDir, nil
-	}
-
 	if req.Repo == "" {
 		return svc.cfg.WorkDir, nil
 	}
@@ -194,6 +197,9 @@ func (svc *service) prepareWorkDir(ctx context.Context, req Request, id string) 
 
 	cmd := exec.CommandContext(ctx, "git", args...)
 	if err := cmd.Run(); err != nil {
+		if removeErr := os.RemoveAll(workDir); removeErr != nil {
+			svc.log.Warn("remove failed clone", zap.String("work_dir", workDir), zap.Error(removeErr))
+		}
 		return "", fmt.Errorf("git clone failed: %w", err)
 	}
 
