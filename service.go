@@ -56,7 +56,15 @@ func (svc *service) Run(ctx context.Context, req Request) (*Result, error) {
 		return nil, err
 	}
 
-	prompt, err := svc.preparePrompt(req, workDir)
+	var diff string
+	if req.BaseRef != "" {
+		diff, err = svc.generateDiff(ctx, req, workDir)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	prompt, err := svc.preparePrompt(req, workDir, diff)
 	if err != nil {
 		return nil, err
 	}
@@ -102,15 +110,15 @@ func (svc *service) buildArgs(req Request) []string {
 	return args
 }
 
-func (svc *service) preparePrompt(req Request, workDir string) (string, error) {
-	if req.Diff == "" && req.BaseRef == "" && req.Event == "" && req.PRNumber == 0 {
+func (svc *service) preparePrompt(req Request, workDir string, diff string) (string, error) {
+	if diff == "" && req.BaseRef == "" && req.Event == "" && req.PRNumber == 0 {
 		return req.Prompt, nil
 	}
 
 	var diffPath string
-	if req.Diff != "" {
+	if diff != "" {
 		diffPath = filepath.Join(workDir, "claude-runner.diff")
-		if err := os.WriteFile(diffPath, []byte(req.Diff), 0o600); err != nil {
+		if err := os.WriteFile(diffPath, []byte(diff), 0o600); err != nil {
 			return "", fmt.Errorf("write diff: %w", err)
 		}
 	}
@@ -140,6 +148,29 @@ func (svc *service) preparePrompt(req Request, workDir string) (string, error) {
 	return b.String(), nil
 }
 
+func (svc *service) generateDiff(ctx context.Context, req Request, workDir string) (string, error) {
+	fetch := exec.CommandContext(ctx, "git", "fetch", "origin", req.BaseRef)
+	fetch.Dir = workDir
+
+	var fetchStderr bytes.Buffer
+	fetch.Stderr = &fetchStderr
+	if err := fetch.Run(); err != nil {
+		return "", fmt.Errorf("git fetch base ref %q failed: %s: %w", req.BaseRef, fetchStderr.String(), err)
+	}
+
+	diff := exec.CommandContext(ctx, "git", "diff", "--no-ext-diff", "--binary", "FETCH_HEAD...HEAD")
+	diff.Dir = workDir
+
+	var stdout, stderr bytes.Buffer
+	diff.Stdout = &stdout
+	diff.Stderr = &stderr
+	if err := diff.Run(); err != nil {
+		return "", fmt.Errorf("git diff base ref %q failed: %s: %w", req.BaseRef, stderr.String(), err)
+	}
+
+	return stdout.String(), nil
+}
+
 func (svc *service) prepareWorkDir(ctx context.Context, req Request, id string) (string, error) {
 	if req.WorkDir != "" {
 		return req.WorkDir, nil
@@ -151,7 +182,10 @@ func (svc *service) prepareWorkDir(ctx context.Context, req Request, id string) 
 
 	workDir := filepath.Join(svc.cfg.WorkDir, id)
 
-	args := []string{"clone", "--depth", "1"}
+	args := []string{"clone"}
+	if req.BaseRef == "" {
+		args = append(args, "--depth", "1")
+	}
 	if req.Ref != "" {
 		args = append(args, "--branch", req.Ref)
 	}

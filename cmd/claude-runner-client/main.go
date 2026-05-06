@@ -59,16 +59,6 @@ func main() {
 				Usage:   "Pull request number",
 				Sources: cli.EnvVars("PR_NUMBER"),
 			},
-			&cli.StringFlag{
-				Name:    "diff",
-				Usage:   "Diff content to include as review context",
-				Sources: cli.EnvVars("DIFF"),
-			},
-			&cli.StringFlag{
-				Name:    "diff-file",
-				Usage:   "Path to a diff file to include as review context",
-				Sources: cli.EnvVars("DIFF_FILE"),
-			},
 			// NATS flags
 			&cli.StringFlag{
 				Name:    "nats-url",
@@ -103,15 +93,6 @@ func main() {
 }
 
 func run(ctx context.Context, cmd *cli.Command) error {
-	diff := cmd.String("diff")
-	if diffFile := cmd.String("diff-file"); diffFile != "" {
-		data, err := os.ReadFile(diffFile)
-		if err != nil {
-			return fmt.Errorf("read diff file: %w", err)
-		}
-		diff = string(data)
-	}
-
 	req := runner.Request{
 		Prompt:   cmd.String("prompt"),
 		Repo:     cmd.String("repo"),
@@ -119,7 +100,6 @@ func run(ctx context.Context, cmd *cli.Command) error {
 		BaseRef:  cmd.String("base-ref"),
 		Event:    cmd.String("event"),
 		PRNumber: cmd.Int("pr-number"),
-		Diff:     diff,
 	}
 
 	transport := cmd.String("transport")

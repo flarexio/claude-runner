@@ -18,7 +18,6 @@ type Request struct {
 	BaseRef  string `json:"base_ref,omitempty"`
 	Event    string `json:"event,omitempty"`
 	PRNumber int    `json:"pr_number,omitempty"`
-	Diff     string `json:"diff,omitempty"`
 	WorkDir  string `json:"work_dir,omitempty"`
 }
 
