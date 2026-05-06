@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -82,6 +83,12 @@ func main() {
 				Usage:   "HTTP endpoint URL",
 				Sources: cli.EnvVars("ENDPOINT"),
 			},
+			// Output flags
+			&cli.StringFlag{
+				Name:    "output-file",
+				Usage:   "Path to write Claude output to (relative paths are resolved under $GITHUB_WORKSPACE)",
+				Sources: cli.EnvVars("OUTPUT_FILE"),
+			},
 		},
 		Action: run,
 	}
@@ -103,24 +110,85 @@ func run(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	transport := cmd.String("transport")
+	outputFile := cmd.String("output-file")
+
+	var (
+		result *runner.Result
+		err    error
+	)
 
 	switch transport {
 	case "nats":
-		return runNATS(cmd, req)
+		result, err = requestNATS(cmd, req)
 	case "http":
-		return runHTTP(cmd, req)
+		result, err = requestHTTP(cmd, req)
 	default:
 		return fmt.Errorf("unsupported transport: %s", transport)
 	}
+	if err != nil {
+		return err
+	}
+
+	return handleResult(result, outputFile)
 }
 
-func runNATS(cmd *cli.Command, req runner.Request) error {
+func handleResult(result *runner.Result, outputFile string) error {
+	if result.Error != "" {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", result.Error)
+	}
+
+	if result.Output != "" {
+		fmt.Print(result.Output)
+	}
+
+	if outputFile != "" {
+		if err := writeOutputFile(outputFile, result.Output); err != nil {
+			fmt.Fprintf(os.Stderr, "write output file: %s\n", err)
+		}
+	}
+
+	if result.Error != "" {
+		return fmt.Errorf("remote claude execution failed")
+	}
+
+	return nil
+}
+
+func writeOutputFile(path, output string) error {
+	resolved := resolveOutputPath(path)
+
+	if dir := filepath.Dir(resolved); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create parent dir: %w", err)
+		}
+	}
+
+	if err := os.WriteFile(resolved, []byte(output), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", resolved, err)
+	}
+
+	return nil
+}
+
+func resolveOutputPath(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+
+	if workspace := os.Getenv("GITHUB_WORKSPACE"); workspace != "" {
+		return filepath.Join(workspace, path)
+	}
+
+	return path
+}
+
+func requestNATS(cmd *cli.Command, req runner.Request) (*runner.Result, error) {
 	natsURL := cmd.String("nats-url")
 	natsCreds := cmd.String("nats-creds")
 	edgeID := cmd.String("edge-id")
 
 	if edgeID == "" {
-		return fmt.Errorf("--edge-id is required for NATS transport")
+		return nil, fmt.Errorf("--edge-id is required for NATS transport")
 	}
 
 	opts := []nats.Option{
@@ -133,7 +201,7 @@ func runNATS(cmd *cli.Command, req runner.Request) error {
 
 	nc, err := nats.Connect(natsURL, opts...)
 	if err != nil {
-		return fmt.Errorf("nats connect: %w", err)
+		return nil, fmt.Errorf("nats connect: %w", err)
 	}
 	defer nc.Drain()
 
@@ -141,73 +209,55 @@ func runNATS(cmd *cli.Command, req runner.Request) error {
 
 	data, err := json.Marshal(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	resp, err := nc.Request(topic+".run", data, 10*time.Minute)
 	if err != nil {
-		return fmt.Errorf("request: %w", err)
+		return nil, fmt.Errorf("request: %w", err)
 	}
 
 	var result runner.Result
 	if err := json.Unmarshal(resp.Data, &result); err != nil {
-		return fmt.Errorf("unmarshal response: %w", err)
+		return nil, fmt.Errorf("unmarshal response: %w", err)
 	}
 
-	if result.Error != "" {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", result.Error)
-		if result.Output != "" {
-			fmt.Print(result.Output)
-		}
-		return fmt.Errorf("remote claude execution failed")
-	}
-	fmt.Print(result.Output)
-
-	return nil
+	return &result, nil
 }
 
-func runHTTP(cmd *cli.Command, req runner.Request) error {
+func requestHTTP(cmd *cli.Command, req runner.Request) (*runner.Result, error) {
 	endpoint := cmd.String("endpoint")
 	if endpoint == "" {
-		return fmt.Errorf("--endpoint is required for HTTP transport")
+		return nil, fmt.Errorf("--endpoint is required for HTTP transport")
 	}
 
 	data, err := json.Marshal(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	url := strings.TrimRight(endpoint, "/") + "/api/run"
 
 	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("http request: %w", err)
+		return nil, fmt.Errorf("http request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
+		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
 	var result runner.Result
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("decode response: %w", err)
+		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	if result.Error != "" {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", result.Error)
-		if result.Output != "" {
-			fmt.Print(result.Output)
-		}
-		return fmt.Errorf("remote claude execution failed")
-	}
-	fmt.Print(result.Output)
-
-	return nil
+	return &result, nil
 }

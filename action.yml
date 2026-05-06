@@ -30,6 +30,8 @@ inputs:
     description: Edge node ID
   endpoint:
     description: HTTP endpoint URL
+  output-file:
+    description: Optional path to write Claude output to (relative paths are resolved under $GITHUB_WORKSPACE)
 
 runs:
   using: docker
@@ -48,3 +50,4 @@ runs:
     INPUT_NATS_CREDS_CONTENT: ${{ inputs.nats-creds-content }}
     INPUT_EDGE_ID: ${{ inputs.edge-id }}
     INPUT_ENDPOINT: ${{ inputs.endpoint }}
+    INPUT_OUTPUT_FILE: ${{ inputs.output-file }}
