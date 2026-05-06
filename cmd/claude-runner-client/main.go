@@ -156,6 +156,10 @@ func runNATS(cmd *cli.Command, req runner.Request) error {
 
 	if result.Error != "" {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", result.Error)
+		if result.Output != "" {
+			fmt.Print(result.Output)
+		}
+		return fmt.Errorf("remote claude execution failed")
 	}
 	fmt.Print(result.Output)
 
@@ -198,6 +202,10 @@ func runHTTP(cmd *cli.Command, req runner.Request) error {
 
 	if result.Error != "" {
 		fmt.Fprintf(os.Stderr, "Error: %s\n", result.Error)
+		if result.Output != "" {
+			fmt.Print(result.Output)
+		}
+		return fmt.Errorf("remote claude execution failed")
 	}
 	fmt.Print(result.Output)
 

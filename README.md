@@ -142,7 +142,7 @@ claude-runner-client \
 Use as a step in your workflow to send prompts to a running claude-runner instance:
 
 ```yaml
-- uses: flarexio/claude-runner@v1.0.2
+- uses: flarexio/claude-runner@v1.0.4
   with:
     prompt: "Review this code for bugs"
     repo: ${{ github.server_url }}/${{ github.repository }}.git

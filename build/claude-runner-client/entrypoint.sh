@@ -4,6 +4,7 @@ set -e
 # Write NATS credentials file from secret
 if [ -n "$INPUT_NATS_CREDS_CONTENT" ]; then
   printf '%s' "$INPUT_NATS_CREDS_CONTENT" > "$INPUT_NATS_CREDS"
+  chmod 600 "$INPUT_NATS_CREDS"
 fi
 
 # Build args, skipping empty optional values
