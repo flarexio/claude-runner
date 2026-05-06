@@ -35,6 +35,10 @@ func (mw *loggingMiddleware) Run(ctx context.Context, req Request) (*Result, err
 		zap.String("action", "run"),
 		zap.String("repo", req.Repo),
 		zap.String("ref", req.Ref),
+		zap.String("base_ref", req.BaseRef),
+		zap.String("event", req.Event),
+		zap.Int("pr_number", req.PRNumber),
+		zap.Bool("has_diff", req.Diff != ""),
 	)
 
 	result, err := mw.next.Run(ctx, req)

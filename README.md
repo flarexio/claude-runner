@@ -135,6 +135,35 @@ Use as a step in your workflow to send prompts to a running claude-runner instan
 
 Add `NATS_CREDS` (content of `user.creds`) to your repository's **Settings → Secrets → Actions**.
 
+For pull request reviews, generate the diff in the workflow and pass it to
+claude-runner so the remote runner does not have to infer the base branch from a
+shallow clone:
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
+
+- name: Generate PR diff
+  if: github.event_name == 'pull_request'
+  run: |
+    mkdir -p .claude-runner
+    git fetch origin ${{ github.base_ref }} --depth=1
+    git diff origin/${{ github.base_ref }}...HEAD > .claude-runner/pr.diff
+
+- uses: flarexio/claude-runner@v1.0.2
+  with:
+    prompt: "Review changed files for bugs"
+    repo: ${{ github.server_url }}/${{ github.repository }}.git
+    ref: ${{ github.head_ref || github.ref_name }}
+    base-ref: ${{ github.base_ref }}
+    event: ${{ github.event_name }}
+    pr-number: ${{ github.event.pull_request.number }}
+    diff-file: .claude-runner/pr.diff
+    edge-id: <your-edge-id>
+    nats-creds-content: ${{ secrets.NATS_CREDS }}
+```
+
 ## API
 
 ### POST /api/run
@@ -145,7 +174,11 @@ Request:
 {
   "prompt": "Review this code for bugs",
   "repo": "git@github.com:user/repo.git",
-  "ref": "main"
+  "ref": "feature/my-change",
+  "base_ref": "main",
+  "event": "pull_request",
+  "pr_number": 2,
+  "diff": "diff --git a/example.go b/example.go\n..."
 }
 ```
 

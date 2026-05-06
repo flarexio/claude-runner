@@ -56,6 +56,12 @@ func (svc *service) Run(ctx context.Context, req Request) (*Result, error) {
 		return nil, err
 	}
 
+	prompt, err := svc.preparePrompt(req, workDir)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Prompt = prompt
 	args := svc.buildArgs(req)
 
 	cmd := exec.CommandContext(ctx, "claude", args...)
@@ -94,6 +100,44 @@ func (svc *service) buildArgs(req Request) []string {
 	}
 
 	return args
+}
+
+func (svc *service) preparePrompt(req Request, workDir string) (string, error) {
+	if req.Diff == "" && req.BaseRef == "" && req.Event == "" && req.PRNumber == 0 {
+		return req.Prompt, nil
+	}
+
+	var diffPath string
+	if req.Diff != "" {
+		diffPath = filepath.Join(workDir, "claude-runner.diff")
+		if err := os.WriteFile(diffPath, []byte(req.Diff), 0o600); err != nil {
+			return "", fmt.Errorf("write diff: %w", err)
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(req.Prompt)
+	b.WriteString("\n\n")
+	b.WriteString("Pull request context supplied by claude-runner:\n")
+
+	if req.Event != "" {
+		fmt.Fprintf(&b, "- Event: %s\n", req.Event)
+	}
+	if req.PRNumber != 0 {
+		fmt.Fprintf(&b, "- PR number: %d\n", req.PRNumber)
+	}
+	if req.BaseRef != "" {
+		fmt.Fprintf(&b, "- Base ref: %s\n", req.BaseRef)
+	}
+	if req.Ref != "" {
+		fmt.Fprintf(&b, "- Head ref: %s\n", req.Ref)
+	}
+	if diffPath != "" {
+		b.WriteString("- Diff file: claude-runner.diff\n")
+		b.WriteString("\nUse claude-runner.diff as the authoritative review scope. Review only changes shown in that diff unless the prompt explicitly asks otherwise.\n")
+	}
+
+	return b.String(), nil
 }
 
 func (svc *service) prepareWorkDir(ctx context.Context, req Request, id string) (string, error) {

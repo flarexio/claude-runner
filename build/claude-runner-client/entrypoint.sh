@@ -13,6 +13,11 @@ set -- \
 
 [ -n "$INPUT_REPO" ]       && set -- "$@" --repo "$INPUT_REPO"
 [ -n "$INPUT_REF" ]        && set -- "$@" --ref "$INPUT_REF"
+[ -n "$INPUT_BASE_REF" ]   && set -- "$@" --base-ref "$INPUT_BASE_REF"
+[ -n "$INPUT_EVENT" ]      && set -- "$@" --event "$INPUT_EVENT"
+[ -n "$INPUT_PR_NUMBER" ]  && set -- "$@" --pr-number "$INPUT_PR_NUMBER"
+[ -n "$INPUT_DIFF" ]       && set -- "$@" --diff "$INPUT_DIFF"
+[ -n "$INPUT_DIFF_FILE" ]  && set -- "$@" --diff-file "$INPUT_DIFF_FILE"
 [ -n "$INPUT_NATS_URL" ]   && set -- "$@" --nats-url "$INPUT_NATS_URL"
 [ -n "$INPUT_NATS_CREDS" ] && set -- "$@" --nats-creds "$INPUT_NATS_CREDS"
 [ -n "$INPUT_EDGE_ID" ]    && set -- "$@" --edge-id "$INPUT_EDGE_ID"
