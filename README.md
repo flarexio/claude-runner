@@ -137,6 +137,21 @@ claude-runner-client \
   --repo git@github.com:user/repo.git
 ```
 
+#### Persisting output to a file
+
+```bash
+claude-runner-client \
+  --edge-id <edge-node-id> \
+  --prompt "Review this code" \
+  --output-file claude-output.md
+```
+
+`--output-file` writes Claude's output to disk in addition to stdout. Relative
+paths are resolved under `$GITHUB_WORKSPACE` when set (otherwise the current
+directory), and parent directories are created automatically. The file is
+written even if the remote returns an error, and the client still exits
+non-zero in that case.
+
 ## GitHub Action
 
 Use as a step in your workflow to send prompts to a running claude-runner instance:
@@ -152,6 +167,7 @@ Use as a step in your workflow to send prompts to a running claude-runner instan
     pr-number: ${{ github.event.pull_request.number || '' }}
     edge-id: <your-edge-id>
     nats-creds-content: ${{ secrets.NATS_CREDS }}
+    output-file: claude-output.md
 ```
 
 Add `NATS_CREDS` (content of `user.creds`) to your repository's **Settings → Secrets → Actions**.
@@ -159,6 +175,21 @@ Add `NATS_CREDS` (content of `user.creds`) to your repository's **Settings → S
 When `base-ref` is present, claude-runner generates a PR diff in the remote
 workspace and uses that diff as Claude's review scope. When `base-ref` is empty,
 claude-runner runs the prompt against the cloned `ref` without diff context.
+
+`output-file` is optional. When set, the client writes Claude's output to that
+path in addition to stdout. Relative paths are resolved under
+`$GITHUB_WORKSPACE`, and parent directories are created automatically. Use this
+to forward the result to `$GITHUB_STEP_SUMMARY`, attach it as an artifact, or
+post it as a PR comment in a follow-up step:
+
+```yaml
+- uses: flarexio/claude-runner@v1
+  with:
+    prompt: "Review this code"
+    output-file: claude-output.md
+    # ...
+- run: cat claude-output.md >> "$GITHUB_STEP_SUMMARY"
+```
 
 ## API
 
