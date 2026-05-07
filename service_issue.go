@@ -3,11 +3,113 @@ package runner
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/oklog/ulid/v2"
 	"go.uber.org/zap"
 )
 
+// IssueJob describes a fully-claimed GitHub issue task ready for Claude.
+// The Issue must already be fetched, validated, and claimed (the claim
+// comment posted, agent-ready removed, claimed-by-claude added).
+// ClaimIssue performs all of that and returns a populated Issue.
+type IssueJob struct {
+	Repo     string      // "owner/repo" slug for GitHub API calls
+	Issue    *Issue      // already-claimed issue
+	CloneURL string      // git URL to clone (e.g. https://github.com/owner/repo.git)
+	Ref      string      // optional branch to check out
+	Cfg      EventConfig // tool / turn / bypass settings for `claude -p`
+	WorkDir  string      // exact directory to clone into; created and removed by RunClaimedIssue
+}
+
+// ClaimIssue fetches an issue, validates it against the agent-task protocol,
+// removes agent-ready, adds claimed-by-claude, and posts a claim comment.
+// Returns the issue so callers don't need to re-fetch it.
+//
+// Both the daemon (Service.Run for event=issue) and the standalone
+// claude-worker CLI use this; once it succeeds, the caller is responsible
+// for either running RunClaimedIssue or otherwise unwinding the claim.
+func ClaimIssue(ctx context.Context, gh GitHubClient, repo string, issueNumber int) (*Issue, error) {
+	if gh == nil {
+		return nil, ErrGitHubUnavailable
+	}
+	if issueNumber <= 0 {
+		return nil, ErrInvalidIssueNumber
+	}
+
+	issue, err := gh.GetIssue(ctx, repo, issueNumber)
+	if err != nil {
+		return nil, fmt.Errorf("fetch issue: %w", err)
+	}
+	if err := validateIssue(issue); err != nil {
+		return nil, err
+	}
+
+	if err := gh.RemoveLabel(ctx, repo, issueNumber, LabelAgentReady); err != nil {
+		return nil, fmt.Errorf("remove %s: %w", LabelAgentReady, err)
+	}
+	if err := gh.AddLabels(ctx, repo, issueNumber, []string{LabelClaimedByClaude}); err != nil {
+		return nil, fmt.Errorf("add %s: %w", LabelClaimedByClaude, err)
+	}
+	if err := gh.CreateComment(ctx, repo, issueNumber, "claude-runner has claimed this issue and started working on it."); err != nil {
+		return nil, fmt.Errorf("comment claim: %w", err)
+	}
+	return issue, nil
+}
+
+// RunClaimedIssue executes Claude against a pre-claimed issue and posts the
+// success/failure outcome to GitHub. It clones into job.WorkDir, runs
+// claude, removes the workdir, then comments on the issue.
+//
+// Returns the Claude result; the returned error is non-nil only for setup
+// failures (e.g. clone failure) where Claude never got to run. Once Claude
+// runs, its outcome — including a non-zero exit — is posted to GitHub and
+// the function returns nil error with the result populated.
+func RunClaimedIssue(ctx context.Context, gh GitHubClient, log *zap.Logger, job IssueJob) (*Result, error) {
+	if log == nil {
+		log = zap.NewNop()
+	}
+	log = log.With(
+		zap.String("repo", job.Repo),
+		zap.Int("issue_number", job.Issue.Number),
+	)
+
+	if job.WorkDir == "" {
+		return nil, fmt.Errorf("issue job missing WorkDir")
+	}
+
+	if err := cloneRepo(ctx, job.CloneURL, job.Ref, job.WorkDir, true); err != nil {
+		log.Error("clone failed", zap.Error(err))
+		reportIssueFailure(ctx, gh, log, job.Repo, job.Issue.Number, fmt.Sprintf("clone failed: %v", err))
+		return nil, err
+	}
+	defer func() {
+		if err := os.RemoveAll(job.WorkDir); err != nil {
+			log.Warn("remove workspace", zap.String("work_dir", job.WorkDir), zap.Error(err))
+		}
+	}()
+
+	prompt := buildIssuePrompt(job.Repo, job.Issue)
+	args := claudeArgs(prompt, job.Cfg)
+
+	result := runClaude(ctx, job.WorkDir, args)
+	result.ID = ulid.Make().String()
+
+	if result.Error != "" {
+		log.Warn("claude reported error", zap.String("error", result.Error))
+		reportIssueFailure(ctx, gh, log, job.Repo, job.Issue.Number, result.Error)
+	} else {
+		log.Info("claude completed", zap.String("id", result.ID))
+		reportIssueSuccess(ctx, gh, log, job.Repo, job.Issue.Number, result.Output)
+	}
+	return result, nil
+}
+
+// runIssue is the daemon-side dispatch: validate + claim synchronously,
+// then run claude in the background. Returns immediately once the claim
+// comment is posted.
 func (svc *service) runIssue(ctx context.Context, req Request) (*Result, error) {
 	if svc.github == nil {
 		return nil, ErrGitHubUnavailable
@@ -17,45 +119,37 @@ func (svc *service) runIssue(ctx context.Context, req Request) (*Result, error) 
 	if err != nil {
 		return nil, err
 	}
-	if req.IssueNumber <= 0 {
-		return nil, ErrInvalidIssueNumber
-	}
 
-	log := svc.log.With(
-		zap.String("repo", slug),
-		zap.Int("issue_number", req.IssueNumber),
-	)
-
-	issue, err := svc.github.GetIssue(ctx, slug, req.IssueNumber)
+	issue, err := ClaimIssue(ctx, svc.github, slug, req.IssueNumber)
 	if err != nil {
-		return nil, fmt.Errorf("fetch issue: %w", err)
-	}
-
-	if err := validateIssue(issue); err != nil {
 		return nil, err
 	}
 
-	if err := svc.claimIssue(ctx, slug, req.IssueNumber); err != nil {
-		return nil, fmt.Errorf("claim issue: %w", err)
+	runID := ulid.Make().String()
+	job := IssueJob{
+		Repo:     slug,
+		Issue:    issue,
+		CloneURL: req.Repo,
+		Ref:      req.Ref,
+		Cfg:      svc.eventConfig(EventIssue),
+		WorkDir:  filepath.Join(svc.cfg.WorkDir, runID),
 	}
 
-	exec := req
-	exec.Prompt = buildIssuePrompt(slug, issue)
+	gh := svc.github
+	log := svc.log
+	svc.launchBg(func(bgCtx context.Context) {
+		if _, err := RunClaimedIssue(bgCtx, gh, log, job); err != nil {
+			log.Error("issue background failed",
+				zap.String("repo", slug),
+				zap.Int("issue_number", req.IssueNumber),
+				zap.Error(err))
+		}
+	})
 
-	result, runErr := svc.execute(ctx, exec)
-	if runErr != nil {
-		log.Error("execute failed", zap.Error(runErr))
-		svc.reportIssueFailure(ctx, slug, req.IssueNumber, runErr.Error())
-		return nil, runErr
-	}
-
-	if result.Error != "" {
-		svc.reportIssueFailure(ctx, slug, req.IssueNumber, result.Error)
-	} else {
-		svc.reportIssueSuccess(ctx, slug, req.IssueNumber, result.Output)
-	}
-
-	return result, nil
+	return &Result{
+		ID:     runID,
+		Output: fmt.Sprintf("Issue %s#%d accepted; claude-runner is processing in the background.", slug, req.IssueNumber),
+	}, nil
 }
 
 func validateIssue(issue *Issue) error {
@@ -78,36 +172,20 @@ func validateIssue(issue *Issue) error {
 	return nil
 }
 
-func (svc *service) claimIssue(ctx context.Context, repo string, number int) error {
-	if err := svc.github.RemoveLabel(ctx, repo, number, LabelAgentReady); err != nil {
-		return fmt.Errorf("remove %s: %w", LabelAgentReady, err)
-	}
-	if err := svc.github.AddLabels(ctx, repo, number, []string{LabelClaimedByClaude}); err != nil {
-		return fmt.Errorf("add %s: %w", LabelClaimedByClaude, err)
-	}
-	if err := svc.github.CreateComment(ctx, repo, number, "claude-runner has claimed this issue and started working on it."); err != nil {
-		return fmt.Errorf("comment claim: %w", err)
-	}
-	return nil
-}
-
-func (svc *service) reportIssueSuccess(ctx context.Context, repo string, number int, output string) {
+func reportIssueSuccess(ctx context.Context, gh GitHubClient, log *zap.Logger, repo string, number int, output string) {
 	body := "claude-runner finished this task.\n\n" + summarize(output)
-	if err := svc.github.CreateComment(ctx, repo, number, body); err != nil {
-		svc.log.Warn("comment success", zap.Error(err),
-			zap.String("repo", repo), zap.Int("issue_number", number))
+	if err := gh.CreateComment(ctx, repo, number, body); err != nil {
+		log.Warn("comment success", zap.Error(err))
 	}
 }
 
-func (svc *service) reportIssueFailure(ctx context.Context, repo string, number int, errSummary string) {
-	if err := svc.github.AddLabels(ctx, repo, number, []string{LabelAgentFailed}); err != nil {
-		svc.log.Warn("add agent-failed", zap.Error(err),
-			zap.String("repo", repo), zap.Int("issue_number", number))
+func reportIssueFailure(ctx context.Context, gh GitHubClient, log *zap.Logger, repo string, number int, errSummary string) {
+	if err := gh.AddLabels(ctx, repo, number, []string{LabelAgentFailed}); err != nil {
+		log.Warn("add agent-failed", zap.Error(err))
 	}
 	body := "claude-runner failed to complete this task.\n\n" + summarize(errSummary)
-	if err := svc.github.CreateComment(ctx, repo, number, body); err != nil {
-		svc.log.Warn("comment failure", zap.Error(err),
-			zap.String("repo", repo), zap.Int("issue_number", number))
+	if err := gh.CreateComment(ctx, repo, number, body); err != nil {
+		log.Warn("comment failure", zap.Error(err))
 	}
 }
 

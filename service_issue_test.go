@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -178,7 +179,7 @@ func TestRunIssueValidationFailureSkipsClaim(t *testing.T) {
 	}
 }
 
-func TestRunIssueClaimsAndExecutes(t *testing.T) {
+func TestRunIssueAcceptsSyncAndCompletesInBackground(t *testing.T) {
 	gh := &fakeGitHub{issue: validIssue()}
 	workspaces := t.TempDir()
 	svc := &service{cfg: Config{WorkDir: workspaces}, log: zap.NewNop(), github: gh}
@@ -193,24 +194,34 @@ func TestRunIssueClaimsAndExecutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if result.Error != "" {
-		t.Fatalf("result.Error = %q, want empty", result.Error)
+	if result.ID == "" {
+		t.Fatal("Run() result.ID is empty, want non-empty for accepted issue")
+	}
+	if !strings.Contains(result.Output, "accepted") {
+		t.Fatalf("result.Output = %q, want accepted message", result.Output)
 	}
 
+	// Claim must have happened synchronously, before Run returned.
 	if got, want := gh.removed, []string{LabelAgentReady}; !sliceEqual(got, want) {
 		t.Fatalf("removed = %v, want %v", got, want)
 	}
 	if !slices.Contains(gh.added, LabelClaimedByClaude) {
 		t.Fatalf("added does not include claimed-by-claude: %v", gh.added)
 	}
+	if len(gh.comments) < 1 || !strings.Contains(gh.comments[0], "claimed") {
+		t.Fatalf("first comment must be the claim message: %v", gh.comments)
+	}
+
+	// Drain background goroutine before checking the success comment.
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
 	if slices.Contains(gh.added, LabelAgentFailed) {
 		t.Fatalf("added unexpectedly includes agent-failed: %v", gh.added)
 	}
 	if len(gh.comments) < 2 {
 		t.Fatalf("expected claim + result comments, got %d: %v", len(gh.comments), gh.comments)
-	}
-	if !strings.Contains(gh.comments[0], "claimed") {
-		t.Fatalf("first comment = %q, want claim message", gh.comments[0])
 	}
 	if !strings.Contains(gh.comments[len(gh.comments)-1], "finished") {
 		t.Fatalf("last comment = %q, want success summary", gh.comments[len(gh.comments)-1])
@@ -224,17 +235,18 @@ func TestRunIssueReportsFailure(t *testing.T) {
 
 	prependFakeClaude(t, 1)
 
-	result, err := svc.Run(context.Background(), Request{
+	if _, err := svc.Run(context.Background(), Request{
 		Event:       EventIssue,
 		Repo:        newRemoteRepo(t),
 		IssueNumber: 42,
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if result.Error == "" {
-		t.Fatal("result.Error is empty, want failure")
+
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
+
 	if !slices.Contains(gh.added, LabelAgentFailed) {
 		t.Fatalf("added does not include agent-failed: %v", gh.added)
 	}
@@ -289,4 +301,91 @@ func TestBuildIssuePromptIncludesContext(t *testing.T) {
 	}
 }
 
+// Direct tests for the public primitives used by claude-worker.
 
+func TestClaimIssueValidatesAndClaims(t *testing.T) {
+	gh := &fakeGitHub{issue: validIssue()}
+
+	issue, err := ClaimIssue(context.Background(), gh, "owner/repo", 42)
+	if err != nil {
+		t.Fatalf("ClaimIssue() error = %v", err)
+	}
+	if issue == nil || issue.Number != 42 {
+		t.Fatalf("ClaimIssue() returned %+v", issue)
+	}
+	if got, want := gh.removed, []string{LabelAgentReady}; !sliceEqual(got, want) {
+		t.Fatalf("removed = %v, want %v", got, want)
+	}
+	if !slices.Contains(gh.added, LabelClaimedByClaude) {
+		t.Fatalf("added does not include claimed-by-claude: %v", gh.added)
+	}
+	if len(gh.comments) != 1 || !strings.Contains(gh.comments[0], "claimed") {
+		t.Fatalf("comments = %v, want exactly one claim comment", gh.comments)
+	}
+}
+
+func TestClaimIssueRejectsValidationFailureWithoutMutation(t *testing.T) {
+	gh := &fakeGitHub{issue: &Issue{State: "closed", Body: IssueMarker}}
+
+	_, err := ClaimIssue(context.Background(), gh, "owner/repo", 1)
+	if !errors.Is(err, ErrIssueNotOpen) {
+		t.Fatalf("err = %v, want ErrIssueNotOpen", err)
+	}
+	if len(gh.removed) != 0 || len(gh.added) != 0 || len(gh.comments) != 0 {
+		t.Fatalf("expected no GitHub mutations: %+v", gh)
+	}
+}
+
+func TestRunClaimedIssuePostsSuccess(t *testing.T) {
+	gh := &fakeGitHub{}
+	prependFakeClaude(t, 0)
+
+	job := IssueJob{
+		Repo:     "owner/repo",
+		Issue:    validIssue(),
+		CloneURL: newRemoteRepo(t),
+		Cfg:      EventConfig{MaxTurns: 5},
+		WorkDir:  filepath.Join(t.TempDir(), "run"),
+	}
+
+	result, err := RunClaimedIssue(context.Background(), gh, zap.NewNop(), job)
+	if err != nil {
+		t.Fatalf("RunClaimedIssue() error = %v", err)
+	}
+	if result.Error != "" {
+		t.Fatalf("result.Error = %q, want empty", result.Error)
+	}
+	if slices.Contains(gh.added, LabelAgentFailed) {
+		t.Fatalf("added unexpectedly includes agent-failed: %v", gh.added)
+	}
+	if len(gh.comments) != 1 || !strings.Contains(gh.comments[0], "finished") {
+		t.Fatalf("comments = %v, want one success comment", gh.comments)
+	}
+}
+
+func TestRunClaimedIssuePostsFailure(t *testing.T) {
+	gh := &fakeGitHub{}
+	prependFakeClaude(t, 1)
+
+	job := IssueJob{
+		Repo:     "owner/repo",
+		Issue:    validIssue(),
+		CloneURL: newRemoteRepo(t),
+		Cfg:      EventConfig{MaxTurns: 5},
+		WorkDir:  filepath.Join(t.TempDir(), "run"),
+	}
+
+	result, err := RunClaimedIssue(context.Background(), gh, zap.NewNop(), job)
+	if err != nil {
+		t.Fatalf("RunClaimedIssue() error = %v", err)
+	}
+	if result.Error == "" {
+		t.Fatal("result.Error empty, want failure")
+	}
+	if !slices.Contains(gh.added, LabelAgentFailed) {
+		t.Fatalf("added does not include agent-failed: %v", gh.added)
+	}
+	if len(gh.comments) != 1 || !strings.Contains(gh.comments[0], "failed") {
+		t.Fatalf("comments = %v, want one failure comment", gh.comments)
+	}
+}

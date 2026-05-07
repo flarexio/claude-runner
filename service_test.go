@@ -21,7 +21,7 @@ func TestBuildArgsUsesIssueOverride(t *testing.T) {
 		},
 	}}
 
-	args := svc.buildArgs(Request{Prompt: "p", Event: EventIssue})
+	args := claudeArgs("p", svc.eventConfig(EventIssue))
 
 	want := []string{"-p", "p", "--allowedTools", "Read,Edit,Write,Bash", "--max-turns", "30"}
 	if !sliceEqual(args, want) {
@@ -35,7 +35,7 @@ func TestBuildArgsIssueFallsBackToDefault(t *testing.T) {
 		MaxTurns:     10,
 	}}
 
-	args := svc.buildArgs(Request{Prompt: "p", Event: EventIssue})
+	args := claudeArgs("p", svc.eventConfig(EventIssue))
 
 	want := []string{"-p", "p", "--allowedTools", "Read,Glob", "--max-turns", "10"}
 	if !sliceEqual(args, want) {
@@ -54,7 +54,7 @@ func TestBuildArgsIssueBypassPermissions(t *testing.T) {
 		},
 	}}
 
-	args := svc.buildArgs(Request{Prompt: "p", Event: EventIssue})
+	args := claudeArgs("p", svc.eventConfig(EventIssue))
 
 	want := []string{"-p", "p", "--dangerously-skip-permissions", "--max-turns", "30"}
 	if !sliceEqual(args, want) {
@@ -72,7 +72,7 @@ func TestBuildArgsNonIssueIgnoresIssueOverride(t *testing.T) {
 		},
 	}}
 
-	args := svc.buildArgs(Request{Prompt: "p", Event: "pull_request"})
+	args := claudeArgs("p", svc.eventConfig("pull_request"))
 
 	want := []string{"-p", "p", "--allowedTools", "Read,Glob", "--max-turns", "10"}
 	if !sliceEqual(args, want) {
@@ -177,7 +177,7 @@ func TestGenerateDiffFromBaseRef(t *testing.T) {
 		t.Fatalf("prepareWorkDir() error = %v", err)
 	}
 
-	diff, err := svc.generateDiff(context.Background(), Request{BaseRef: "main"}, workDir)
+	diff, err := generateDiff(context.Background(), workDir, "main")
 	if err != nil {
 		t.Fatalf("generateDiff() error = %v", err)
 	}

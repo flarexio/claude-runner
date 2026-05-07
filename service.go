@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/oklog/ulid/v2"
 	"go.uber.org/zap"
@@ -44,10 +45,26 @@ type service struct {
 	cfg    Config
 	log    *zap.Logger
 	github GitHubClient
+
+	bgWg sync.WaitGroup
 }
 
+// Close blocks until all background goroutines finish. Background work
+// (e.g. async issue execution) inherits a fresh context, so Close does not
+// cancel in-flight work — it only waits for it.
 func (svc *service) Close() error {
+	svc.bgWg.Wait()
 	return nil
+}
+
+// launchBg runs fn in a tracked goroutine. The goroutine receives a fresh
+// context so its lifetime is decoupled from any caller's request context.
+func (svc *service) launchBg(fn func(context.Context)) {
+	svc.bgWg.Add(1)
+	go func() {
+		defer svc.bgWg.Done()
+		fn(context.Background())
+	}()
 }
 
 func (svc *service) Run(ctx context.Context, req Request) (*Result, error) {
@@ -64,8 +81,8 @@ func (svc *service) runPrompt(ctx context.Context, req Request) (*Result, error)
 	return svc.execute(ctx, req)
 }
 
-// execute is the shared Claude invocation path used by every event type.
-// It clones (when needed), generates a diff (when applicable), composes the
+// execute runs a synchronous Claude invocation for non-issue events. It
+// clones (when needed), generates a diff (when applicable), composes the
 // final prompt, and runs claude.
 func (svc *service) execute(ctx context.Context, req Request) (*Result, error) {
 	id := ulid.Make().String()
@@ -84,7 +101,7 @@ func (svc *service) execute(ctx context.Context, req Request) (*Result, error) {
 
 	var diff string
 	if req.BaseRef != "" {
-		diff, err = svc.generateDiff(ctx, req, workDir)
+		diff, err = generateDiff(ctx, workDir, req.BaseRef)
 		if err != nil {
 			return nil, err
 		}
@@ -95,47 +112,10 @@ func (svc *service) execute(ctx context.Context, req Request) (*Result, error) {
 		return nil, err
 	}
 
-	req.Prompt = prompt
-	args := svc.buildArgs(req)
-
-	cmd := exec.CommandContext(ctx, "claude", args...)
-	cmd.Dir = workDir
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	result := &Result{ID: id}
-
-	if err := cmd.Run(); err != nil {
-		result.Output = stdout.String()
-		result.Error = stderr.String()
-		if result.Error == "" {
-			result.Error = err.Error()
-		}
-
-		return result, nil
-	}
-
-	result.Output = stdout.String()
-
+	args := claudeArgs(prompt, svc.eventConfig(req.Event))
+	result := runClaude(ctx, workDir, args)
+	result.ID = id
 	return result, nil
-}
-
-func (svc *service) buildArgs(req Request) []string {
-	args := []string{"-p", req.Prompt}
-
-	cfg := svc.eventConfig(req.Event)
-	if cfg.BypassPermissions {
-		args = append(args, "--dangerously-skip-permissions")
-	} else if len(cfg.AllowedTools) > 0 {
-		args = append(args, "--allowedTools", strings.Join(cfg.AllowedTools, ","))
-	}
-	if cfg.MaxTurns > 0 {
-		args = append(args, "--max-turns", fmt.Sprintf("%d", cfg.MaxTurns))
-	}
-
-	return args
 }
 
 // eventConfig resolves the effective Claude flags for an event. Issue events
@@ -201,14 +181,51 @@ func (svc *service) preparePrompt(req Request, workDir string, diff string) (str
 	return b.String(), nil
 }
 
-func (svc *service) generateDiff(ctx context.Context, req Request, workDir string) (string, error) {
-	fetch := exec.CommandContext(ctx, "git", "fetch", "origin", req.BaseRef)
+func (svc *service) prepareWorkDir(ctx context.Context, req Request, id string) (string, error) {
+	if req.Repo == "" {
+		return svc.cfg.WorkDir, nil
+	}
+
+	workDir := filepath.Join(svc.cfg.WorkDir, id)
+	shallow := req.BaseRef == ""
+	if err := cloneRepo(ctx, req.Repo, req.Ref, workDir, shallow); err != nil {
+		return "", err
+	}
+	return workDir, nil
+}
+
+// cloneRepo clones cloneURL into workDir. If ref is non-empty, checks out
+// that branch. Use shallow=true for one-shot runs (issue mode, simple
+// prompts) and false when downstream code needs to fetch a base ref for
+// diffing.
+func cloneRepo(ctx context.Context, cloneURL, ref, workDir string, shallow bool) error {
+	args := []string{"clone"}
+	if shallow {
+		args = append(args, "--depth", "1")
+	}
+	if ref != "" {
+		args = append(args, "--branch", ref)
+	}
+	args = append(args, cloneURL, workDir)
+
+	cmd := exec.CommandContext(ctx, "git", args...)
+	if err := cmd.Run(); err != nil {
+		_ = os.RemoveAll(workDir)
+		return fmt.Errorf("git clone failed: %w", err)
+	}
+	return nil
+}
+
+// generateDiff fetches baseRef into workDir and returns the diff between
+// FETCH_HEAD and HEAD.
+func generateDiff(ctx context.Context, workDir, baseRef string) (string, error) {
+	fetch := exec.CommandContext(ctx, "git", "fetch", "origin", baseRef)
 	fetch.Dir = workDir
 
 	var fetchStderr bytes.Buffer
 	fetch.Stderr = &fetchStderr
 	if err := fetch.Run(); err != nil {
-		return "", fmt.Errorf("git fetch base ref %q failed: %s: %w", req.BaseRef, fetchStderr.String(), err)
+		return "", fmt.Errorf("git fetch base ref %q failed: %s: %w", baseRef, fetchStderr.String(), err)
 	}
 
 	diff := exec.CommandContext(ctx, "git", "diff", "--no-ext-diff", "--binary", "FETCH_HEAD...HEAD")
@@ -218,36 +235,48 @@ func (svc *service) generateDiff(ctx context.Context, req Request, workDir strin
 	diff.Stdout = &stdout
 	diff.Stderr = &stderr
 	if err := diff.Run(); err != nil {
-		return "", fmt.Errorf("git diff base ref %q failed: %s: %w", req.BaseRef, stderr.String(), err)
+		return "", fmt.Errorf("git diff base ref %q failed: %s: %w", baseRef, stderr.String(), err)
 	}
-
 	return stdout.String(), nil
 }
 
-func (svc *service) prepareWorkDir(ctx context.Context, req Request, id string) (string, error) {
-	if req.Repo == "" {
-		return svc.cfg.WorkDir, nil
+// claudeArgs builds the argument list for `claude -p` from a prompt and a
+// resolved EventConfig.
+func claudeArgs(prompt string, cfg EventConfig) []string {
+	args := []string{"-p", prompt}
+
+	if cfg.BypassPermissions {
+		args = append(args, "--dangerously-skip-permissions")
+	} else if len(cfg.AllowedTools) > 0 {
+		args = append(args, "--allowedTools", strings.Join(cfg.AllowedTools, ","))
 	}
-
-	workDir := filepath.Join(svc.cfg.WorkDir, id)
-
-	args := []string{"clone"}
-	if req.BaseRef == "" {
-		args = append(args, "--depth", "1")
+	if cfg.MaxTurns > 0 {
+		args = append(args, "--max-turns", fmt.Sprintf("%d", cfg.MaxTurns))
 	}
-	if req.Ref != "" {
-		args = append(args, "--branch", req.Ref)
-	}
+	return args
+}
 
-	args = append(args, req.Repo, workDir)
+// runClaude invokes the claude binary in workDir with the given args. The
+// returned Result captures stdout/stderr; a non-zero exit is reported via
+// Result.Error rather than a returned error (mirrors existing semantics).
+// Result.ID is left empty for the caller to populate.
+func runClaude(ctx context.Context, workDir string, args []string) *Result {
+	cmd := exec.CommandContext(ctx, "claude", args...)
+	cmd.Dir = workDir
 
-	cmd := exec.CommandContext(ctx, "git", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	result := &Result{}
 	if err := cmd.Run(); err != nil {
-		if removeErr := os.RemoveAll(workDir); removeErr != nil {
-			svc.log.Warn("remove failed clone", zap.String("work_dir", workDir), zap.Error(removeErr))
+		result.Output = stdout.String()
+		result.Error = stderr.String()
+		if result.Error == "" {
+			result.Error = err.Error()
 		}
-		return "", fmt.Errorf("git clone failed: %w", err)
+		return result
 	}
-
-	return workDir, nil
+	result.Output = stdout.String()
+	return result
 }

@@ -25,11 +25,14 @@ Service → Middleware (logging) → Endpoint → Transport (NATS / HTTP)
 ## Installation
 
 ```bash
-# Server
+# Server (NATS / HTTP daemon)
 go install github.com/flarexio/claude-runner/cmd/claude-runner@latest
 
-# Client
+# Client used by GitHub Actions and ad-hoc invocations
 go install github.com/flarexio/claude-runner/cmd/claude-runner-client@latest
+
+# One-shot worker for issue tasks (callable directly by AI agents)
+go install github.com/flarexio/claude-runner/cmd/claude-worker@latest
 ```
 
 ## Configuration
@@ -104,7 +107,11 @@ optionally checks out `ref`, generates pull request diff context when
 
 When `event` is `issue`, claude-runner treats the request as a GitHub issue
 task. It requires `repo` and `issue_number`, plus a configured GitHub token.
-The runner:
+The flow splits into a **synchronous claim phase** and an **asynchronous
+execution phase** so the API caller (and the GitHub Action triggering it)
+isn't held open for the full Claude run.
+
+Synchronous (returns to the caller as soon as it finishes):
 
 1. Fetches the issue and verifies it is **open**
 2. Verifies the body contains `<!-- agent-task:v1 -->`
@@ -113,15 +120,24 @@ The runner:
 4. Rejects the issue if it is labelled `claimed-by-claude`, `agent-blocked`,
    or `security-sensitive`
 5. Removes `agent-ready`, adds `claimed-by-claude`, and posts a claim comment
-6. Builds the prompt from the issue body and runs `claude -p` (Claude is
+
+The API call returns here with `{id, status: accepted}`. Background:
+
+6. Clones the repo into `workDir/<run-id>`
+7. Builds the prompt from the issue body and runs `claude -p` (Claude is
    instructed to implement the task, not merge PRs, and report the tests it
    ran)
-7. On success: posts a summary comment. On failure: adds `agent-failed` and
-   posts a failure comment
+8. On success: posts a summary comment. On failure: adds `agent-failed` and
+   posts a failure comment. The clone is removed either way.
 
 The runner never auto-closes the issue and never auto-merges anything.
-`prompt` is ignored for issue events; the prompt is built server-side from the
-issue body.
+`prompt` is ignored for issue events; the prompt is built server-side from
+the issue body. Validation/claim failures are returned synchronously to the
+caller; once the claim succeeds, downstream failures are reported on the
+issue itself, not in the API response.
+
+The same flow is also exposed as a standalone CLI for AI agents — see
+[claude-worker](#claude-worker) below.
 
 ### id
 
@@ -352,8 +368,10 @@ Request:
 - `pull_request` (or omitted): runs the prompt; combine with `repo`, `ref`, and
   `base_ref` for review context.
 - `issue`: requires `repo` and `issue_number`. The server fetches the issue,
-  validates it (open, marker, required/excluded labels), claims it, and runs
-  `claude -p` against a prompt built from the issue body. `prompt` is ignored.
+  validates it (open, marker, required/excluded labels), claims it, and
+  returns synchronously. Claude execution and result-posting happen in the
+  background; the response carries `{id, status: accepted}`. `prompt` is
+  ignored.
 
 Response:
 
@@ -364,6 +382,42 @@ Response:
   "error": ""
 }
 ```
+
+For `event: issue`, `output` is the accept message rather than Claude's
+output. The real result lands as a comment on the GitHub issue.
+
+## claude-worker
+
+`cmd/claude-worker` is a one-shot CLI that performs the full GitHub issue
+agent-task protocol — claim, run Claude, post results — in a single
+foreground invocation. It exists so the same primitives the daemon uses
+(`runner.ClaimIssue` + `runner.RunClaimedIssue`) are also reachable as a
+standalone tool that AI agents can invoke directly.
+
+```bash
+claude-worker \
+  --repo owner/repo \
+  --issue-number 42 \
+  --github-token "$GITHUB_TOKEN" \
+  --workspace /tmp/claude-worker \
+  --bypass-permissions \
+  --max-turns 30
+```
+
+Required: `--repo`, `--issue-number`, `--github-token`. Useful flags:
+
+- `--clone-url` — override the git clone URL when `--repo` is in `owner/repo`
+  form and you want a non-default URL (e.g. embedded auth).
+- `--ref` — branch to check out.
+- `--bypass-permissions` — pass `--dangerously-skip-permissions` to claude.
+- `--allowed-tools` — comma-separated tool list (ignored when bypass is on).
+- `--max-turns` — Claude turn cap; defaults to 30.
+- `--workspace` — clone parent directory; defaults to `$TMPDIR/claude-worker`.
+
+Validation/claim failures cause a non-zero exit before Claude runs. Once
+Claude runs, the result (including a non-zero exit) is posted to the issue
+and the worker mirrors that on stdout / stderr. The worker never
+auto-closes the issue and never auto-merges anything.
 
 ## License
 
