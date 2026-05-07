@@ -43,6 +43,25 @@ func TestBuildArgsIssueFallsBackToDefault(t *testing.T) {
 	}
 }
 
+func TestBuildArgsIssueBypassPermissions(t *testing.T) {
+	svc := &service{cfg: Config{
+		AllowedTools: []string{"Read", "Glob"},
+		MaxTurns:     10,
+		Issue: EventConfig{
+			AllowedTools:      []string{"Edit", "Write"},
+			MaxTurns:          30,
+			BypassPermissions: true,
+		},
+	}}
+
+	args := svc.buildArgs(Request{Prompt: "p", Event: EventIssue})
+
+	want := []string{"-p", "p", "--dangerously-skip-permissions", "--max-turns", "30"}
+	if !sliceEqual(args, want) {
+		t.Fatalf("args = %v, want %v", args, want)
+	}
+}
+
 func TestBuildArgsNonIssueIgnoresIssueOverride(t *testing.T) {
 	svc := &service{cfg: Config{
 		AllowedTools: []string{"Read", "Glob"},

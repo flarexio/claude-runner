@@ -125,34 +125,38 @@ func (svc *service) execute(ctx context.Context, req Request) (*Result, error) {
 func (svc *service) buildArgs(req Request) []string {
 	args := []string{"-p", req.Prompt}
 
-	tools, maxTurns := svc.toolsFor(req.Event)
-	if len(tools) > 0 {
-		args = append(args, "--allowedTools", strings.Join(tools, ","))
+	cfg := svc.eventConfig(req.Event)
+	if cfg.BypassPermissions {
+		args = append(args, "--dangerously-skip-permissions")
+	} else if len(cfg.AllowedTools) > 0 {
+		args = append(args, "--allowedTools", strings.Join(cfg.AllowedTools, ","))
 	}
-	if maxTurns > 0 {
-		args = append(args, "--max-turns", fmt.Sprintf("%d", maxTurns))
+	if cfg.MaxTurns > 0 {
+		args = append(args, "--max-turns", fmt.Sprintf("%d", cfg.MaxTurns))
 	}
 
 	return args
 }
 
-// toolsFor returns the allowedTools and maxTurns to use for an event.
-// Issue events read from cfg.Issue first and fall through to the top-level
-// values; other events always use the top-level values.
-func (svc *service) toolsFor(event string) ([]string, int) {
+// eventConfig resolves the effective Claude flags for an event. Issue events
+// read from cfg.Issue first and fall through to the top-level values; other
+// events always use the top-level values.
+func (svc *service) eventConfig(event string) EventConfig {
 	if event != EventIssue {
-		return svc.cfg.AllowedTools, svc.cfg.MaxTurns
+		return EventConfig{
+			AllowedTools: svc.cfg.AllowedTools,
+			MaxTurns:     svc.cfg.MaxTurns,
+		}
 	}
 
-	tools := svc.cfg.Issue.AllowedTools
-	if len(tools) == 0 {
-		tools = svc.cfg.AllowedTools
+	resolved := svc.cfg.Issue
+	if len(resolved.AllowedTools) == 0 {
+		resolved.AllowedTools = svc.cfg.AllowedTools
 	}
-	maxTurns := svc.cfg.Issue.MaxTurns
-	if maxTurns == 0 {
-		maxTurns = svc.cfg.MaxTurns
+	if resolved.MaxTurns == 0 {
+		resolved.MaxTurns = svc.cfg.MaxTurns
 	}
-	return tools, maxTurns
+	return resolved
 }
 
 func (svc *service) preparePrompt(req Request, workDir string, diff string) (string, error) {

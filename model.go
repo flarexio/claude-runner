@@ -55,9 +55,15 @@ type Config struct {
 
 // EventConfig overrides the top-level Claude flags for a specific event.
 // Empty fields fall back to the top-level Config values.
+//
+// BypassPermissions, when true, passes --dangerously-skip-permissions to
+// claude and ignores AllowedTools. Use only for trusted unattended flows
+// (issue mode behind label + author gates) where no human is watching tool
+// calls.
 type EventConfig struct {
-	AllowedTools []string `yaml:"allowedTools,omitempty"`
-	MaxTurns     int      `yaml:"maxTurns,omitempty"`
+	AllowedTools      []string `yaml:"allowedTools,omitempty"`
+	MaxTurns          int      `yaml:"maxTurns,omitempty"`
+	BypassPermissions bool     `yaml:"bypassPermissions,omitempty"`
 }
 
 type GitHubConfig struct {
