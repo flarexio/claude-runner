@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/oklog/ulid/v2"
 	"go.uber.org/zap"
@@ -16,6 +17,7 @@ import (
 type Service interface {
 	Close() error
 	Run(ctx context.Context, req Request) (*Result, error)
+	RunIssue(ctx context.Context, req Request) (*Result, error)
 }
 
 type ServiceMiddleware func(Service) Service
@@ -44,29 +46,40 @@ type service struct {
 	cfg    Config
 	log    *zap.Logger
 	github GitHubClient
+
+	bgWg sync.WaitGroup
 }
 
+// Close blocks until any background work (e.g. async issue execution) has
+// finished. Close does not cancel in-flight work; the goroutines run on a
+// fresh context independent of any caller's request lifetime.
 func (svc *service) Close() error {
+	svc.bgWg.Wait()
 	return nil
 }
 
-func (svc *service) Run(ctx context.Context, req Request) (*Result, error) {
-	if req.Event == EventIssue {
-		return svc.runIssue(ctx, req)
-	}
-	return svc.runPrompt(ctx, req)
+// launchBg runs fn in a tracked goroutine with a fresh context so its
+// lifetime is decoupled from the caller's request context.
+func (svc *service) launchBg(fn func(context.Context)) {
+	svc.bgWg.Add(1)
+	go func() {
+		defer svc.bgWg.Done()
+		fn(context.Background())
+	}()
 }
 
-func (svc *service) runPrompt(ctx context.Context, req Request) (*Result, error) {
+// Run handles prompt-only and pull-request review jobs synchronously.
+// Issue jobs go through RunIssue.
+func (svc *service) Run(ctx context.Context, req Request) (*Result, error) {
 	if req.Prompt == "" {
 		return nil, ErrInvalidPrompt
 	}
 	return svc.execute(ctx, req)
 }
 
-// execute is the shared Claude invocation path used by every event type.
-// It clones (when needed), generates a diff (when applicable), composes the
-// final prompt, and runs claude.
+// execute clones (when needed), generates a diff (when applicable), composes
+// the final prompt, and runs claude. Used by Run and by the background
+// portion of RunIssue.
 func (svc *service) execute(ctx context.Context, req Request) (*Result, error) {
 	id := ulid.Make().String()
 
@@ -160,7 +173,7 @@ func (svc *service) eventConfig(event string) EventConfig {
 }
 
 func (svc *service) preparePrompt(req Request, workDir string, diff string) (string, error) {
-	// Issue events build their prompt in runIssue; no PR trailer.
+	// Issue events build their prompt before reaching execute; no PR trailer.
 	if req.Event == EventIssue {
 		return req.Prompt, nil
 	}

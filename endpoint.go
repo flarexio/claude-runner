@@ -8,7 +8,8 @@ import (
 )
 
 type EndpointSet struct {
-	Run endpoint.Endpoint
+	Run      endpoint.Endpoint
+	RunIssue endpoint.Endpoint
 }
 
 type Request struct {
@@ -33,7 +34,16 @@ func RunEndpoint(svc Service) endpoint.Endpoint {
 		if !ok {
 			return nil, errors.New("invalid request type")
 		}
-
 		return svc.Run(ctx, req)
+	}
+}
+
+func RunIssueEndpoint(svc Service) endpoint.Endpoint {
+	return func(ctx context.Context, request any) (any, error) {
+		req, ok := request.(Request)
+		if !ok {
+			return nil, errors.New("invalid request type")
+		}
+		return svc.RunIssue(ctx, req)
 	}
 }

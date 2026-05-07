@@ -7,5 +7,6 @@ import (
 )
 
 func AddEndpoints(group micro.Group, endpoints runner.EndpointSet) {
-	group.AddEndpoint("run", RunHandler(endpoints.Run))
+	group.AddEndpoint("run", EndpointHandler(endpoints.Run))
+	group.AddEndpoint("run-issue", EndpointHandler(endpoints.RunIssue))
 }

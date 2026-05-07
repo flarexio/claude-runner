@@ -179,6 +179,15 @@ func writeOutputFile(path, output string) error {
 	return nil
 }
 
+// endpointSubjectFor returns the suffix used for both the HTTP path
+// (/api/<suffix>) and the NATS subject (<topic>.<suffix>).
+func endpointSubjectFor(event string) string {
+	if event == runner.EventIssue {
+		return "run-issue"
+	}
+	return "run"
+}
+
 func resolveOutputPath(path string) string {
 	if filepath.IsAbs(path) {
 		return path
@@ -221,7 +230,8 @@ func requestNATS(cmd *cli.Command, req runner.Request) (*runner.Result, error) {
 		return nil, err
 	}
 
-	resp, err := nc.Request(topic+".run", data, 10*time.Minute)
+	subject := topic + "." + endpointSubjectFor(req.Event)
+	resp, err := nc.Request(subject, data, 10*time.Minute)
 	if err != nil {
 		return nil, fmt.Errorf("request: %w", err)
 	}
@@ -245,7 +255,7 @@ func requestHTTP(cmd *cli.Command, req runner.Request) (*runner.Result, error) {
 		return nil, err
 	}
 
-	url := strings.TrimRight(endpoint, "/") + "/api/run"
+	url := strings.TrimRight(endpoint, "/") + "/api/" + endpointSubjectFor(req.Event)
 
 	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
