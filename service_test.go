@@ -21,7 +21,7 @@ func TestBuildArgsUsesIssueOverride(t *testing.T) {
 		},
 	}}
 
-	args := svc.buildArgs(Request{Prompt: "p", Event: EventIssue})
+	args := svc.buildArgs(RunRequest{Prompt: "p", Event: EventIssue})
 
 	want := []string{"-p", "p", "--allowedTools", "Read,Edit,Write,Bash", "--max-turns", "30"}
 	if !sliceEqual(args, want) {
@@ -35,7 +35,7 @@ func TestBuildArgsIssueFallsBackToDefault(t *testing.T) {
 		MaxTurns:     10,
 	}}
 
-	args := svc.buildArgs(Request{Prompt: "p", Event: EventIssue})
+	args := svc.buildArgs(RunRequest{Prompt: "p", Event: EventIssue})
 
 	want := []string{"-p", "p", "--allowedTools", "Read,Glob", "--max-turns", "10"}
 	if !sliceEqual(args, want) {
@@ -54,7 +54,7 @@ func TestBuildArgsIssueBypassPermissions(t *testing.T) {
 		},
 	}}
 
-	args := svc.buildArgs(Request{Prompt: "p", Event: EventIssue})
+	args := svc.buildArgs(RunRequest{Prompt: "p", Event: EventIssue})
 
 	want := []string{"-p", "p", "--dangerously-skip-permissions", "--max-turns", "30"}
 	if !sliceEqual(args, want) {
@@ -72,7 +72,7 @@ func TestBuildArgsNonIssueIgnoresIssueOverride(t *testing.T) {
 		},
 	}}
 
-	args := svc.buildArgs(Request{Prompt: "p", Event: "pull_request"})
+	args := svc.buildArgs(RunRequest{Prompt: "p", Event: "pull_request"})
 
 	want := []string{"-p", "p", "--allowedTools", "Read,Glob", "--max-turns", "10"}
 	if !sliceEqual(args, want) {
@@ -96,7 +96,7 @@ func TestPreparePromptWritesDiffContext(t *testing.T) {
 	workDir := t.TempDir()
 	svc := &service{}
 
-	prompt, err := svc.preparePrompt(Request{
+	prompt, err := svc.preparePrompt(RunRequest{
 		Prompt:   "Review changed files",
 		Ref:      "feature/review",
 		BaseRef:  "main",
@@ -132,7 +132,7 @@ func TestPreparePromptWritesDiffContext(t *testing.T) {
 func TestPreparePromptLeavesPlainPromptUnchanged(t *testing.T) {
 	svc := &service{}
 
-	prompt, err := svc.preparePrompt(Request{Prompt: "Run tests"}, t.TempDir(), "")
+	prompt, err := svc.preparePrompt(RunRequest{Prompt: "Run tests"}, t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("preparePrompt() error = %v", err)
 	}
@@ -168,7 +168,7 @@ func TestGenerateDiffFromBaseRef(t *testing.T) {
 	workspaces := t.TempDir()
 	svc := &service{cfg: Config{WorkDir: workspaces}}
 
-	workDir, err := svc.prepareWorkDir(context.Background(), Request{
+	workDir, err := svc.prepareWorkDir(context.Background(), RunRequest{
 		Repo:    remote,
 		Ref:     "feature/review",
 		BaseRef: "main",
@@ -177,7 +177,7 @@ func TestGenerateDiffFromBaseRef(t *testing.T) {
 		t.Fatalf("prepareWorkDir() error = %v", err)
 	}
 
-	diff, err := svc.generateDiff(context.Background(), Request{BaseRef: "main"}, workDir)
+	diff, err := svc.generateDiff(context.Background(), RunRequest{BaseRef: "main"}, workDir)
 	if err != nil {
 		t.Fatalf("generateDiff() error = %v", err)
 	}
@@ -192,7 +192,7 @@ func TestRunRemovesClonedWorkDirAfterClaudeSuccess(t *testing.T) {
 	svc := &service{cfg: Config{WorkDir: workspaces}}
 	prependFakeClaude(t, 0)
 
-	result, err := svc.Run(context.Background(), Request{
+	result, err := svc.Run(context.Background(), RunRequest{
 		Prompt: "Run tests",
 		Repo:   remote,
 		Ref:    "main",
@@ -212,7 +212,7 @@ func TestRunRemovesClonedWorkDirAfterClaudeFailure(t *testing.T) {
 	svc := &service{cfg: Config{WorkDir: workspaces}}
 	prependFakeClaude(t, 1)
 
-	result, err := svc.Run(context.Background(), Request{
+	result, err := svc.Run(context.Background(), RunRequest{
 		Prompt: "Run tests",
 		Repo:   remote,
 		Ref:    "main",
@@ -233,7 +233,7 @@ func TestPrepareWorkDirRemovesFailedClone(t *testing.T) {
 	workspaces := t.TempDir()
 	svc := &service{cfg: Config{WorkDir: workspaces}}
 
-	workDir, err := svc.prepareWorkDir(context.Background(), Request{
+	workDir, err := svc.prepareWorkDir(context.Background(), RunRequest{
 		Repo: filepath.Join(t.TempDir(), "missing.git"),
 	}, "run")
 	if err == nil {

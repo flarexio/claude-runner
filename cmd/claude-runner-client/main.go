@@ -104,18 +104,32 @@ func main() {
 }
 
 func run(ctx context.Context, cmd *cli.Command) error {
-	req := runner.Request{
-		Prompt:      cmd.String("prompt"),
-		Repo:        cmd.String("repo"),
-		Ref:         cmd.String("ref"),
-		BaseRef:     cmd.String("base-ref"),
-		Event:       cmd.String("event"),
-		PRNumber:    cmd.Int("pr-number"),
-		IssueNumber: cmd.Int("issue-number"),
-	}
+	event := cmd.String("event")
 
-	if req.Event != runner.EventIssue && req.Prompt == "" {
-		return fmt.Errorf("--prompt is required unless --event=issue")
+	var (
+		payload any
+		subject string
+	)
+	if event == runner.EventIssue {
+		payload = runner.RunIssueRequest{
+			Repo:        cmd.String("repo"),
+			Ref:         cmd.String("ref"),
+			IssueNumber: cmd.Int("issue-number"),
+		}
+		subject = "run-issue"
+	} else {
+		if cmd.String("prompt") == "" {
+			return fmt.Errorf("--prompt is required unless --event=issue")
+		}
+		payload = runner.RunRequest{
+			Prompt:   cmd.String("prompt"),
+			Repo:     cmd.String("repo"),
+			Ref:      cmd.String("ref"),
+			BaseRef:  cmd.String("base-ref"),
+			Event:    event,
+			PRNumber: cmd.Int("pr-number"),
+		}
+		subject = "run"
 	}
 
 	transport := cmd.String("transport")
@@ -128,9 +142,9 @@ func run(ctx context.Context, cmd *cli.Command) error {
 
 	switch transport {
 	case "nats":
-		result, err = requestNATS(cmd, req)
+		result, err = requestNATS(cmd, payload, subject)
 	case "http":
-		result, err = requestHTTP(cmd, req)
+		result, err = requestHTTP(cmd, payload, subject)
 	default:
 		return fmt.Errorf("unsupported transport: %s", transport)
 	}
@@ -179,15 +193,6 @@ func writeOutputFile(path, output string) error {
 	return nil
 }
 
-// endpointSubjectFor returns the suffix used for both the HTTP path
-// (/api/<suffix>) and the NATS subject (<topic>.<suffix>).
-func endpointSubjectFor(event string) string {
-	if event == runner.EventIssue {
-		return "run-issue"
-	}
-	return "run"
-}
-
 func resolveOutputPath(path string) string {
 	if filepath.IsAbs(path) {
 		return path
@@ -200,7 +205,7 @@ func resolveOutputPath(path string) string {
 	return path
 }
 
-func requestNATS(cmd *cli.Command, req runner.Request) (*runner.Result, error) {
+func requestNATS(cmd *cli.Command, payload any, subjectSuffix string) (*runner.Result, error) {
 	natsURL := cmd.String("nats-url")
 	natsCreds := cmd.String("nats-creds")
 	edgeID := cmd.String("edge-id")
@@ -225,12 +230,12 @@ func requestNATS(cmd *cli.Command, req runner.Request) (*runner.Result, error) {
 
 	topic := "edges." + edgeID + ".claude-runner"
 
-	data, err := json.Marshal(req)
+	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
 
-	subject := topic + "." + endpointSubjectFor(req.Event)
+	subject := topic + "." + subjectSuffix
 	resp, err := nc.Request(subject, data, 10*time.Minute)
 	if err != nil {
 		return nil, fmt.Errorf("request: %w", err)
@@ -244,18 +249,18 @@ func requestNATS(cmd *cli.Command, req runner.Request) (*runner.Result, error) {
 	return &result, nil
 }
 
-func requestHTTP(cmd *cli.Command, req runner.Request) (*runner.Result, error) {
+func requestHTTP(cmd *cli.Command, payload any, pathSuffix string) (*runner.Result, error) {
 	endpoint := cmd.String("endpoint")
 	if endpoint == "" {
 		return nil, fmt.Errorf("--endpoint is required for HTTP transport")
 	}
 
-	data, err := json.Marshal(req)
+	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
 
-	url := strings.TrimRight(endpoint, "/") + "/api/" + endpointSubjectFor(req.Event)
+	url := strings.TrimRight(endpoint, "/") + "/api/" + pathSuffix
 
 	httpReq, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {

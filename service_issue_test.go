@@ -127,7 +127,7 @@ func TestValidateIssueRejectsExcludedLabels(t *testing.T) {
 
 func TestRunIssueRequiresGitHubClient(t *testing.T) {
 	svc := &service{cfg: Config{}, log: zap.NewNop()}
-	_, err := svc.RunIssue(context.Background(), Request{
+	_, err := svc.RunIssue(context.Background(), RunIssueRequest{
 		Repo:        "owner/repo",
 		IssueNumber: 1,
 	})
@@ -138,7 +138,7 @@ func TestRunIssueRequiresGitHubClient(t *testing.T) {
 
 func TestRunIssueRequiresIssueNumber(t *testing.T) {
 	svc := &service{cfg: Config{}, log: zap.NewNop(), github: &fakeGitHub{}}
-	_, err := svc.RunIssue(context.Background(), Request{
+	_, err := svc.RunIssue(context.Background(), RunIssueRequest{
 		Repo: "owner/repo",
 	})
 	if !errors.Is(err, ErrInvalidIssueNumber) {
@@ -148,7 +148,7 @@ func TestRunIssueRequiresIssueNumber(t *testing.T) {
 
 func TestRunIssueRejectsBadRepo(t *testing.T) {
 	svc := &service{cfg: Config{}, log: zap.NewNop(), github: &fakeGitHub{}}
-	_, err := svc.RunIssue(context.Background(), Request{
+	_, err := svc.RunIssue(context.Background(), RunIssueRequest{
 		Repo:        "no-slash",
 		IssueNumber: 1,
 	})
@@ -161,7 +161,7 @@ func TestRunIssueValidationFailureSkipsClaim(t *testing.T) {
 	gh := &fakeGitHub{issue: &Issue{State: "closed", Body: IssueMarker}}
 	svc := &service{cfg: Config{}, log: zap.NewNop(), github: gh}
 
-	_, err := svc.RunIssue(context.Background(), Request{
+	_, err := svc.RunIssue(context.Background(), RunIssueRequest{
 		Repo:        "owner/repo",
 		IssueNumber: 1,
 	})
@@ -181,7 +181,7 @@ func TestRunIssueAcceptsSyncAndCompletesInBackground(t *testing.T) {
 
 	prependFakeClaude(t, 0)
 
-	result, err := svc.RunIssue(context.Background(), Request{
+	result, err := svc.RunIssue(context.Background(), RunIssueRequest{
 		Repo:        newRemoteRepo(t),
 		IssueNumber: 42,
 	})
@@ -229,7 +229,7 @@ func TestRunIssueReportsFailure(t *testing.T) {
 
 	prependFakeClaude(t, 1)
 
-	if _, err := svc.RunIssue(context.Background(), Request{
+	if _, err := svc.RunIssue(context.Background(), RunIssueRequest{
 		Repo:        newRemoteRepo(t),
 		IssueNumber: 42,
 	}); err != nil {
@@ -256,7 +256,7 @@ func TestRunPromptDoesNotTouchGitHub(t *testing.T) {
 
 	prependFakeClaude(t, 0)
 
-	result, err := svc.Run(context.Background(), Request{
+	result, err := svc.Run(context.Background(), RunRequest{
 		Prompt: "Run tests",
 	})
 	if err != nil {
@@ -272,7 +272,7 @@ func TestRunPromptDoesNotTouchGitHub(t *testing.T) {
 
 func TestRunRequiresPrompt(t *testing.T) {
 	svc := &service{cfg: Config{}, log: zap.NewNop()}
-	_, err := svc.Run(context.Background(), Request{})
+	_, err := svc.Run(context.Background(), RunRequest{})
 	if !errors.Is(err, ErrInvalidPrompt) {
 		t.Fatalf("err = %v, want ErrInvalidPrompt", err)
 	}

@@ -18,7 +18,7 @@ import (
 //
 // Use Service.Close to wait for in-flight background work — required for
 // one-shot CLI invocations and graceful daemon shutdown.
-func (svc *service) RunIssue(ctx context.Context, req Request) (*Result, error) {
+func (svc *service) RunIssue(ctx context.Context, req RunIssueRequest) (*Result, error) {
 	if svc.github == nil {
 		return nil, ErrGitHubUnavailable
 	}
@@ -44,9 +44,15 @@ func (svc *service) RunIssue(ctx context.Context, req Request) (*Result, error) 
 
 	runID := ulid.Make().String()
 
-	exec := req
-	exec.Event = EventIssue
-	exec.Prompt = buildIssuePrompt(slug, issue)
+	// Translate to the internal RunRequest that execute consumes. Event is
+	// set so claudeArgs picks up the issue-specific overrides and so
+	// preparePrompt skips the PR trailer.
+	exec := RunRequest{
+		Prompt: buildIssuePrompt(slug, issue),
+		Repo:   req.Repo,
+		Ref:    req.Ref,
+		Event:  EventIssue,
+	}
 
 	svc.launchBg(func(bgCtx context.Context) {
 		log := svc.log.With(

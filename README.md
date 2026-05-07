@@ -401,9 +401,10 @@ Response (returns after the claim phase, before Claude runs):
 }
 ```
 
-`prompt` is ignored — the runner builds it from the issue body. Final
-success/failure is posted as a comment on the GitHub issue, not in the
-response.
+The two endpoints have distinct request types — `run` does not accept
+`issue_number`, and `run-issue` does not accept `prompt`/`base_ref`/
+`pr_number`. Final issue success/failure is posted as a comment on the
+GitHub issue, not in the response.
 
 NATS callers use the same endpoint names as subjects:
 `<topic>.run` and `<topic>.run-issue`.

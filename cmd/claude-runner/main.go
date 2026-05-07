@@ -228,8 +228,7 @@ func runIssue(ctx context.Context, cmd *cli.Command) error {
 	}
 	svc = runner.LoggingMiddleware(logger)(svc)
 
-	req := runner.Request{
-		Event:       runner.EventIssue,
+	req := runner.RunIssueRequest{
 		Repo:        cmd.String("repo"),
 		Ref:         cmd.String("ref"),
 		IssueNumber: cmd.Int("issue-number"),

@@ -12,13 +12,15 @@ import (
 func AddRouters(r *gin.Engine, endpoints runner.EndpointSet) {
 	api := r.Group("/api")
 
-	api.POST("/run", endpointHandler(endpoints.Run))
-	api.POST("/run-issue", endpointHandler(endpoints.RunIssue))
+	api.POST("/run", endpointHandler[runner.RunRequest](endpoints.Run))
+	api.POST("/run-issue", endpointHandler[runner.RunIssueRequest](endpoints.RunIssue))
 }
 
-func endpointHandler(ep endpoint.Endpoint) gin.HandlerFunc {
+// endpointHandler binds the JSON body to T, then dispatches to ep. Each
+// endpoint has its own request type; nothing is shared at this layer.
+func endpointHandler[T any](ep endpoint.Endpoint) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req runner.Request
+		var req T
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return

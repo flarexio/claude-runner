@@ -16,8 +16,8 @@ import (
 
 type Service interface {
 	Close() error
-	Run(ctx context.Context, req Request) (*Result, error)
-	RunIssue(ctx context.Context, req Request) (*Result, error)
+	Run(ctx context.Context, req RunRequest) (*Result, error)
+	RunIssue(ctx context.Context, req RunIssueRequest) (*Result, error)
 }
 
 type ServiceMiddleware func(Service) Service
@@ -70,7 +70,7 @@ func (svc *service) launchBg(fn func(context.Context)) {
 
 // Run handles prompt-only and pull-request review jobs synchronously.
 // Issue jobs go through RunIssue.
-func (svc *service) Run(ctx context.Context, req Request) (*Result, error) {
+func (svc *service) Run(ctx context.Context, req RunRequest) (*Result, error) {
 	if req.Prompt == "" {
 		return nil, ErrInvalidPrompt
 	}
@@ -80,7 +80,7 @@ func (svc *service) Run(ctx context.Context, req Request) (*Result, error) {
 // execute clones (when needed), generates a diff (when applicable), composes
 // the final prompt, and runs claude. Used by Run and by the background
 // portion of RunIssue.
-func (svc *service) execute(ctx context.Context, req Request) (*Result, error) {
+func (svc *service) execute(ctx context.Context, req RunRequest) (*Result, error) {
 	id := ulid.Make().String()
 
 	workDir, err := svc.prepareWorkDir(ctx, req, id)
@@ -135,7 +135,7 @@ func (svc *service) execute(ctx context.Context, req Request) (*Result, error) {
 	return result, nil
 }
 
-func (svc *service) buildArgs(req Request) []string {
+func (svc *service) buildArgs(req RunRequest) []string {
 	args := []string{"-p", req.Prompt}
 
 	cfg := svc.eventConfig(req.Event)
@@ -172,7 +172,7 @@ func (svc *service) eventConfig(event string) EventConfig {
 	return resolved
 }
 
-func (svc *service) preparePrompt(req Request, workDir string, diff string) (string, error) {
+func (svc *service) preparePrompt(req RunRequest, workDir string, diff string) (string, error) {
 	// Issue events build their prompt before reaching execute; no PR trailer.
 	if req.Event == EventIssue {
 		return req.Prompt, nil
@@ -214,7 +214,7 @@ func (svc *service) preparePrompt(req Request, workDir string, diff string) (str
 	return b.String(), nil
 }
 
-func (svc *service) generateDiff(ctx context.Context, req Request, workDir string) (string, error) {
+func (svc *service) generateDiff(ctx context.Context, req RunRequest, workDir string) (string, error) {
 	fetch := exec.CommandContext(ctx, "git", "fetch", "origin", req.BaseRef)
 	fetch.Dir = workDir
 
@@ -237,7 +237,7 @@ func (svc *service) generateDiff(ctx context.Context, req Request, workDir strin
 	return stdout.String(), nil
 }
 
-func (svc *service) prepareWorkDir(ctx context.Context, req Request, id string) (string, error) {
+func (svc *service) prepareWorkDir(ctx context.Context, req RunRequest, id string) (string, error) {
 	if req.Repo == "" {
 		return svc.cfg.WorkDir, nil
 	}

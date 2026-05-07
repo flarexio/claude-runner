@@ -12,14 +12,19 @@ type EndpointSet struct {
 	RunIssue endpoint.Endpoint
 }
 
-type Request struct {
-	Prompt      string `json:"prompt"`
-	Repo        string `json:"repo,omitempty"`
+type RunRequest struct {
+	Prompt   string `json:"prompt"`
+	Repo     string `json:"repo,omitempty"`
+	Ref      string `json:"ref,omitempty"`
+	BaseRef  string `json:"base_ref,omitempty"`
+	Event    string `json:"event,omitempty"`
+	PRNumber int    `json:"pr_number,omitempty"`
+}
+
+type RunIssueRequest struct {
+	Repo        string `json:"repo"`
 	Ref         string `json:"ref,omitempty"`
-	BaseRef     string `json:"base_ref,omitempty"`
-	Event       string `json:"event,omitempty"`
-	PRNumber    int    `json:"pr_number,omitempty"`
-	IssueNumber int    `json:"issue_number,omitempty"`
+	IssueNumber int    `json:"issue_number"`
 }
 
 type Result struct {
@@ -30,7 +35,7 @@ type Result struct {
 
 func RunEndpoint(svc Service) endpoint.Endpoint {
 	return func(ctx context.Context, request any) (any, error) {
-		req, ok := request.(Request)
+		req, ok := request.(RunRequest)
 		if !ok {
 			return nil, errors.New("invalid request type")
 		}
@@ -40,7 +45,7 @@ func RunEndpoint(svc Service) endpoint.Endpoint {
 
 func RunIssueEndpoint(svc Service) endpoint.Endpoint {
 	return func(ctx context.Context, request any) (any, error) {
-		req, ok := request.(Request)
+		req, ok := request.(RunIssueRequest)
 		if !ok {
 			return nil, errors.New("invalid request type")
 		}
