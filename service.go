@@ -29,15 +29,21 @@ func NewService(cfg Config) (Service, error) {
 		return nil, err
 	}
 
-	return &service{
+	svc := &service{
 		cfg: cfg,
 		log: log,
-	}, nil
+	}
+	if cfg.GitHub.Token != "" {
+		svc.github = NewGitHubClient(cfg.GitHub)
+	}
+
+	return svc, nil
 }
 
 type service struct {
-	cfg Config
-	log *zap.Logger
+	cfg    Config
+	log    *zap.Logger
+	github GitHubClient
 }
 
 func (svc *service) Close() error {
@@ -45,10 +51,23 @@ func (svc *service) Close() error {
 }
 
 func (svc *service) Run(ctx context.Context, req Request) (*Result, error) {
+	if req.Event == EventIssue {
+		return svc.runIssue(ctx, req)
+	}
+	return svc.runPrompt(ctx, req)
+}
+
+func (svc *service) runPrompt(ctx context.Context, req Request) (*Result, error) {
 	if req.Prompt == "" {
 		return nil, ErrInvalidPrompt
 	}
+	return svc.execute(ctx, req)
+}
 
+// execute is the shared Claude invocation path used by every event type.
+// It clones (when needed), generates a diff (when applicable), composes the
+// final prompt, and runs claude.
+func (svc *service) execute(ctx context.Context, req Request) (*Result, error) {
 	id := ulid.Make().String()
 
 	workDir, err := svc.prepareWorkDir(ctx, req, id)

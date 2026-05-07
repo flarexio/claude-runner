@@ -30,10 +30,9 @@ func main() {
 				Sources: cli.EnvVars("TRANSPORT"),
 			},
 			&cli.StringFlag{
-				Name:     "prompt",
-				Usage:    "Prompt to send",
-				Required: true,
-				Sources:  cli.EnvVars("PROMPT"),
+				Name:    "prompt",
+				Usage:   "Prompt to send (required unless --event=issue)",
+				Sources: cli.EnvVars("PROMPT"),
 			},
 			&cli.StringFlag{
 				Name:    "repo",
@@ -59,6 +58,11 @@ func main() {
 				Name:    "pr-number",
 				Usage:   "Pull request number",
 				Sources: cli.EnvVars("PR_NUMBER"),
+			},
+			&cli.IntFlag{
+				Name:    "issue-number",
+				Usage:   "Issue number (for event=issue)",
+				Sources: cli.EnvVars("ISSUE_NUMBER"),
 			},
 			// NATS flags
 			&cli.StringFlag{
@@ -101,12 +105,17 @@ func main() {
 
 func run(ctx context.Context, cmd *cli.Command) error {
 	req := runner.Request{
-		Prompt:   cmd.String("prompt"),
-		Repo:     cmd.String("repo"),
-		Ref:      cmd.String("ref"),
-		BaseRef:  cmd.String("base-ref"),
-		Event:    cmd.String("event"),
-		PRNumber: cmd.Int("pr-number"),
+		Prompt:      cmd.String("prompt"),
+		Repo:        cmd.String("repo"),
+		Ref:         cmd.String("ref"),
+		BaseRef:     cmd.String("base-ref"),
+		Event:       cmd.String("event"),
+		PRNumber:    cmd.Int("pr-number"),
+		IssueNumber: cmd.Int("issue-number"),
+	}
+
+	if req.Event != runner.EventIssue && req.Prompt == "" {
+		return fmt.Errorf("--prompt is required unless --event=issue")
 	}
 
 	transport := cmd.String("transport")

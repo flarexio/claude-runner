@@ -6,8 +6,7 @@ inputs:
     description: Transport type (nats or http)
     default: nats
   prompt:
-    description: Prompt to send
-    required: true
+    description: Prompt to send (required unless event is "issue")
   repo:
     description: Repository URL
   ref:
@@ -15,9 +14,11 @@ inputs:
   base-ref:
     description: Base git ref for pull request context
   event:
-    description: Source event name, such as pull_request
+    description: Source event name (e.g. pull_request, issue)
   pr-number:
     description: Pull request number
+  issue-number:
+    description: Issue number (used when event is "issue")
   nats-url:
     description: NATS server URL
     default: wss://nats.flarex.io
@@ -45,6 +46,7 @@ runs:
     INPUT_BASE_REF: ${{ inputs.base-ref }}
     INPUT_EVENT: ${{ inputs.event }}
     INPUT_PR_NUMBER: ${{ inputs.pr-number }}
+    INPUT_ISSUE_NUMBER: ${{ inputs.issue-number }}
     INPUT_NATS_URL: ${{ inputs.nats-url }}
     INPUT_NATS_CREDS: ${{ inputs.nats-creds }}
     INPUT_NATS_CREDS_CONTENT: ${{ inputs.nats-creds-content }}

@@ -12,12 +12,13 @@ type EndpointSet struct {
 }
 
 type Request struct {
-	Prompt   string `json:"prompt"`
-	Repo     string `json:"repo,omitempty"`
-	Ref      string `json:"ref,omitempty"`
-	BaseRef  string `json:"base_ref,omitempty"`
-	Event    string `json:"event,omitempty"`
-	PRNumber int    `json:"pr_number,omitempty"`
+	Prompt      string `json:"prompt"`
+	Repo        string `json:"repo,omitempty"`
+	Ref         string `json:"ref,omitempty"`
+	BaseRef     string `json:"base_ref,omitempty"`
+	Event       string `json:"event,omitempty"`
+	PRNumber    int    `json:"pr_number,omitempty"`
+	IssueNumber int    `json:"issue_number,omitempty"`
 }
 
 type Result struct {
