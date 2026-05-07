@@ -3,8 +3,7 @@ package runner
 import "errors"
 
 const (
-	EventIssue       = "issue"
-	EventPullRequest = "pull_request"
+	EventIssue = "issue"
 
 	IssueMarker = "<!-- agent-task:v1 -->"
 

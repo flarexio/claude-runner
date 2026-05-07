@@ -66,15 +66,15 @@ func validIssue() *Issue {
 }
 
 func TestValidateIssueAccepts(t *testing.T) {
-	if err := ValidateIssue(validIssue()); err != nil {
-		t.Fatalf("ValidateIssue() = %v, want nil", err)
+	if err := validateIssue(validIssue()); err != nil {
+		t.Fatalf("validateIssue() = %v, want nil", err)
 	}
 }
 
 func TestValidateIssueRejectsClosed(t *testing.T) {
 	issue := validIssue()
 	issue.State = "closed"
-	if err := ValidateIssue(issue); !errors.Is(err, ErrIssueNotOpen) {
+	if err := validateIssue(issue); !errors.Is(err, ErrIssueNotOpen) {
 		t.Fatalf("err = %v, want ErrIssueNotOpen", err)
 	}
 }
@@ -82,7 +82,7 @@ func TestValidateIssueRejectsClosed(t *testing.T) {
 func TestValidateIssueRequiresMarker(t *testing.T) {
 	issue := validIssue()
 	issue.Body = "no marker here"
-	if err := ValidateIssue(issue); !errors.Is(err, ErrIssueMarkerMissing) {
+	if err := validateIssue(issue); !errors.Is(err, ErrIssueMarkerMissing) {
 		t.Fatalf("err = %v, want ErrIssueMarkerMissing", err)
 	}
 }
@@ -98,7 +98,7 @@ func TestValidateIssueRequiresAllLabels(t *testing.T) {
 				}
 			}
 			issue.Labels = kept
-			err := ValidateIssue(issue)
+			err := validateIssue(issue)
 			if !errors.Is(err, ErrIssueLabelMissing) {
 				t.Fatalf("err = %v, want ErrIssueLabelMissing", err)
 			}
@@ -114,7 +114,7 @@ func TestValidateIssueRejectsExcludedLabels(t *testing.T) {
 		t.Run(bad, func(t *testing.T) {
 			issue := validIssue()
 			issue.Labels = append(issue.Labels, Label{Name: bad})
-			err := ValidateIssue(issue)
+			err := validateIssue(issue)
 			if !errors.Is(err, ErrIssueLabelExcluded) {
 				t.Fatalf("err = %v, want ErrIssueLabelExcluded", err)
 			}

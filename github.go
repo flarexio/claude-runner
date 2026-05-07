@@ -49,14 +49,6 @@ func (i *Issue) HasLabel(name string) bool {
 	return false
 }
 
-func (i *Issue) LabelNames() []string {
-	names := make([]string, 0, len(i.Labels))
-	for _, l := range i.Labels {
-		names = append(names, l.Name)
-	}
-	return names
-}
-
 type httpGitHubClient struct {
 	baseURL string
 	token   string

@@ -137,6 +137,10 @@ func (svc *service) buildArgs(req Request) []string {
 }
 
 func (svc *service) preparePrompt(req Request, workDir string, diff string) (string, error) {
+	// Issue events build their prompt in runIssue; no PR trailer.
+	if req.Event == EventIssue {
+		return req.Prompt, nil
+	}
 	if diff == "" && req.BaseRef == "" && req.Event == "" && req.PRNumber == 0 {
 		return req.Prompt, nil
 	}

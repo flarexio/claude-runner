@@ -31,7 +31,7 @@ func (svc *service) runIssue(ctx context.Context, req Request) (*Result, error) 
 		return nil, fmt.Errorf("fetch issue: %w", err)
 	}
 
-	if err := ValidateIssue(issue); err != nil {
+	if err := validateIssue(issue); err != nil {
 		return nil, err
 	}
 
@@ -58,12 +58,7 @@ func (svc *service) runIssue(ctx context.Context, req Request) (*Result, error) 
 	return result, nil
 }
 
-// ValidateIssue verifies an issue meets all preconditions before claude-runner
-// will act on it.
-func ValidateIssue(issue *Issue) error {
-	if issue == nil {
-		return ErrTaskNotFound
-	}
+func validateIssue(issue *Issue) error {
 	if !issue.IsOpen() {
 		return ErrIssueNotOpen
 	}
@@ -90,7 +85,7 @@ func (svc *service) claimIssue(ctx context.Context, repo string, number int) err
 	if err := svc.github.AddLabels(ctx, repo, number, []string{LabelClaimedByClaude}); err != nil {
 		return fmt.Errorf("add %s: %w", LabelClaimedByClaude, err)
 	}
-	if err := svc.github.CreateComment(ctx, repo, number, claimComment()); err != nil {
+	if err := svc.github.CreateComment(ctx, repo, number, "claude-runner has claimed this issue and started working on it."); err != nil {
 		return fmt.Errorf("comment claim: %w", err)
 	}
 	return nil
@@ -114,10 +109,6 @@ func (svc *service) reportIssueFailure(ctx context.Context, repo string, number 
 		svc.log.Warn("comment failure", zap.Error(err),
 			zap.String("repo", repo), zap.Int("issue_number", number))
 	}
-}
-
-func claimComment() string {
-	return "claude-runner has claimed this issue and started working on it."
 }
 
 func buildIssuePrompt(repo string, issue *Issue) string {
