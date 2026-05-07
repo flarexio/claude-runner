@@ -5,3 +5,6 @@ allowedTools:
 - Grep
 - Bash
 maxTurns: 10
+# github:
+#   token: ghp_xxx        # required for event=issue; falls back to $GITHUB_TOKEN
+#   baseURL: https://api.github.com
