@@ -90,6 +90,10 @@ func run(ctx context.Context, cmd *cli.Command) error {
 		cfg.WorkDir = filepath.Join(path, "workspaces")
 	}
 
+	if envToken := os.Getenv("GITHUB_TOKEN"); envToken != "" && cfg.GitHub.Token == "" {
+		cfg.GitHub.Token = envToken
+	}
+
 	svc, err := runner.NewService(cfg)
 	if err != nil {
 		return err

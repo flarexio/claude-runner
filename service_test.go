@@ -11,6 +11,87 @@ import (
 	"testing"
 )
 
+func TestBuildArgsUsesIssueOverride(t *testing.T) {
+	svc := &service{cfg: Config{
+		AllowedTools: []string{"Read", "Glob"},
+		MaxTurns:     10,
+		Issue: EventConfig{
+			AllowedTools: []string{"Read", "Edit", "Write", "Bash"},
+			MaxTurns:     30,
+		},
+	}}
+
+	args := svc.buildArgs(Request{Prompt: "p", Event: EventIssue})
+
+	want := []string{"-p", "p", "--allowedTools", "Read,Edit,Write,Bash", "--max-turns", "30"}
+	if !sliceEqual(args, want) {
+		t.Fatalf("args = %v, want %v", args, want)
+	}
+}
+
+func TestBuildArgsIssueFallsBackToDefault(t *testing.T) {
+	svc := &service{cfg: Config{
+		AllowedTools: []string{"Read", "Glob"},
+		MaxTurns:     10,
+	}}
+
+	args := svc.buildArgs(Request{Prompt: "p", Event: EventIssue})
+
+	want := []string{"-p", "p", "--allowedTools", "Read,Glob", "--max-turns", "10"}
+	if !sliceEqual(args, want) {
+		t.Fatalf("args = %v, want %v", args, want)
+	}
+}
+
+func TestBuildArgsIssueBypassPermissions(t *testing.T) {
+	svc := &service{cfg: Config{
+		AllowedTools: []string{"Read", "Glob"},
+		MaxTurns:     10,
+		Issue: EventConfig{
+			AllowedTools:      []string{"Edit", "Write"},
+			MaxTurns:          30,
+			BypassPermissions: true,
+		},
+	}}
+
+	args := svc.buildArgs(Request{Prompt: "p", Event: EventIssue})
+
+	want := []string{"-p", "p", "--dangerously-skip-permissions", "--max-turns", "30"}
+	if !sliceEqual(args, want) {
+		t.Fatalf("args = %v, want %v", args, want)
+	}
+}
+
+func TestBuildArgsNonIssueIgnoresIssueOverride(t *testing.T) {
+	svc := &service{cfg: Config{
+		AllowedTools: []string{"Read", "Glob"},
+		MaxTurns:     10,
+		Issue: EventConfig{
+			AllowedTools: []string{"Edit", "Write"},
+			MaxTurns:     30,
+		},
+	}}
+
+	args := svc.buildArgs(Request{Prompt: "p", Event: "pull_request"})
+
+	want := []string{"-p", "p", "--allowedTools", "Read,Glob", "--max-turns", "10"}
+	if !sliceEqual(args, want) {
+		t.Fatalf("args = %v, want %v", args, want)
+	}
+}
+
+func sliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestPreparePromptWritesDiffContext(t *testing.T) {
 	workDir := t.TempDir()
 	svc := &service{}

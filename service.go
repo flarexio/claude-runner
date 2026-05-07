@@ -29,15 +29,21 @@ func NewService(cfg Config) (Service, error) {
 		return nil, err
 	}
 
-	return &service{
+	svc := &service{
 		cfg: cfg,
 		log: log,
-	}, nil
+	}
+	if cfg.GitHub.Token != "" {
+		svc.github = NewGitHubClient(cfg.GitHub)
+	}
+
+	return svc, nil
 }
 
 type service struct {
-	cfg Config
-	log *zap.Logger
+	cfg    Config
+	log    *zap.Logger
+	github GitHubClient
 }
 
 func (svc *service) Close() error {
@@ -45,10 +51,23 @@ func (svc *service) Close() error {
 }
 
 func (svc *service) Run(ctx context.Context, req Request) (*Result, error) {
+	if req.Event == EventIssue {
+		return svc.runIssue(ctx, req)
+	}
+	return svc.runPrompt(ctx, req)
+}
+
+func (svc *service) runPrompt(ctx context.Context, req Request) (*Result, error) {
 	if req.Prompt == "" {
 		return nil, ErrInvalidPrompt
 	}
+	return svc.execute(ctx, req)
+}
 
+// execute is the shared Claude invocation path used by every event type.
+// It clones (when needed), generates a diff (when applicable), composes the
+// final prompt, and runs claude.
+func (svc *service) execute(ctx context.Context, req Request) (*Result, error) {
 	id := ulid.Make().String()
 
 	workDir, err := svc.prepareWorkDir(ctx, req, id)
@@ -106,18 +125,45 @@ func (svc *service) Run(ctx context.Context, req Request) (*Result, error) {
 func (svc *service) buildArgs(req Request) []string {
 	args := []string{"-p", req.Prompt}
 
-	if len(svc.cfg.AllowedTools) > 0 {
-		args = append(args, "--allowedTools", strings.Join(svc.cfg.AllowedTools, ","))
+	cfg := svc.eventConfig(req.Event)
+	if cfg.BypassPermissions {
+		args = append(args, "--dangerously-skip-permissions")
+	} else if len(cfg.AllowedTools) > 0 {
+		args = append(args, "--allowedTools", strings.Join(cfg.AllowedTools, ","))
 	}
-
-	if svc.cfg.MaxTurns > 0 {
-		args = append(args, "--max-turns", fmt.Sprintf("%d", svc.cfg.MaxTurns))
+	if cfg.MaxTurns > 0 {
+		args = append(args, "--max-turns", fmt.Sprintf("%d", cfg.MaxTurns))
 	}
 
 	return args
 }
 
+// eventConfig resolves the effective Claude flags for an event. Issue events
+// read from cfg.Issue first and fall through to the top-level values; other
+// events always use the top-level values.
+func (svc *service) eventConfig(event string) EventConfig {
+	if event != EventIssue {
+		return EventConfig{
+			AllowedTools: svc.cfg.AllowedTools,
+			MaxTurns:     svc.cfg.MaxTurns,
+		}
+	}
+
+	resolved := svc.cfg.Issue
+	if len(resolved.AllowedTools) == 0 {
+		resolved.AllowedTools = svc.cfg.AllowedTools
+	}
+	if resolved.MaxTurns == 0 {
+		resolved.MaxTurns = svc.cfg.MaxTurns
+	}
+	return resolved
+}
+
 func (svc *service) preparePrompt(req Request, workDir string, diff string) (string, error) {
+	// Issue events build their prompt in runIssue; no PR trailer.
+	if req.Event == EventIssue {
+		return req.Prompt, nil
+	}
 	if diff == "" && req.BaseRef == "" && req.Event == "" && req.PRNumber == 0 {
 		return req.Prompt, nil
 	}

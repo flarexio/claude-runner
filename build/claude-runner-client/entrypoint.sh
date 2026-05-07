@@ -8,19 +8,19 @@ if [ -n "$INPUT_NATS_CREDS_CONTENT" ]; then
 fi
 
 # Build args, skipping empty optional values
-set -- \
-  --transport "$INPUT_TRANSPORT" \
-  --prompt "$INPUT_PROMPT"
+set -- --transport "$INPUT_TRANSPORT"
 
-[ -n "$INPUT_REPO" ]        && set -- "$@" --repo "$INPUT_REPO"
-[ -n "$INPUT_REF" ]         && set -- "$@" --ref "$INPUT_REF"
-[ -n "$INPUT_BASE_REF" ]    && set -- "$@" --base-ref "$INPUT_BASE_REF"
-[ -n "$INPUT_EVENT" ]       && set -- "$@" --event "$INPUT_EVENT"
-[ -n "$INPUT_PR_NUMBER" ]   && set -- "$@" --pr-number "$INPUT_PR_NUMBER"
-[ -n "$INPUT_NATS_URL" ]    && set -- "$@" --nats-url "$INPUT_NATS_URL"
-[ -n "$INPUT_NATS_CREDS" ]  && set -- "$@" --nats-creds "$INPUT_NATS_CREDS"
-[ -n "$INPUT_EDGE_ID" ]     && set -- "$@" --edge-id "$INPUT_EDGE_ID"
-[ -n "$INPUT_ENDPOINT" ]    && set -- "$@" --endpoint "$INPUT_ENDPOINT"
-[ -n "$INPUT_OUTPUT_FILE" ] && set -- "$@" --output-file "$INPUT_OUTPUT_FILE"
+[ -n "$INPUT_PROMPT" ]       && set -- "$@" --prompt "$INPUT_PROMPT"
+[ -n "$INPUT_REPO" ]         && set -- "$@" --repo "$INPUT_REPO"
+[ -n "$INPUT_REF" ]          && set -- "$@" --ref "$INPUT_REF"
+[ -n "$INPUT_BASE_REF" ]     && set -- "$@" --base-ref "$INPUT_BASE_REF"
+[ -n "$INPUT_EVENT" ]        && set -- "$@" --event "$INPUT_EVENT"
+[ -n "$INPUT_PR_NUMBER" ]    && set -- "$@" --pr-number "$INPUT_PR_NUMBER"
+[ -n "$INPUT_ISSUE_NUMBER" ] && set -- "$@" --issue-number "$INPUT_ISSUE_NUMBER"
+[ -n "$INPUT_NATS_URL" ]     && set -- "$@" --nats-url "$INPUT_NATS_URL"
+[ -n "$INPUT_NATS_CREDS" ]   && set -- "$@" --nats-creds "$INPUT_NATS_CREDS"
+[ -n "$INPUT_EDGE_ID" ]      && set -- "$@" --edge-id "$INPUT_EDGE_ID"
+[ -n "$INPUT_ENDPOINT" ]     && set -- "$@" --endpoint "$INPUT_ENDPOINT"
+[ -n "$INPUT_OUTPUT_FILE" ]  && set -- "$@" --output-file "$INPUT_OUTPUT_FILE"
 
 exec claude-runner-client "$@"
