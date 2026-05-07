@@ -197,7 +197,7 @@ func TestRunIssueClaimsAndExecutes(t *testing.T) {
 		t.Fatalf("result.Error = %q, want empty", result.Error)
 	}
 
-	if got, want := gh.removed, []string{LabelAgentReady}; !equal(got, want) {
+	if got, want := gh.removed, []string{LabelAgentReady}; !sliceEqual(got, want) {
 		t.Fatalf("removed = %v, want %v", got, want)
 	}
 	if !slices.Contains(gh.added, LabelClaimedByClaude) {
@@ -289,15 +289,4 @@ func TestBuildIssuePromptIncludesContext(t *testing.T) {
 	}
 }
 
-func equal(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
 

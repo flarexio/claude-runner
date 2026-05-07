@@ -49,7 +49,15 @@ type Config struct {
 	WorkDir      string       `yaml:"workDir"`
 	AllowedTools []string     `yaml:"allowedTools"`
 	MaxTurns     int          `yaml:"maxTurns"`
+	Issue        EventConfig  `yaml:"issue,omitempty"`
 	GitHub       GitHubConfig `yaml:"github,omitempty"`
+}
+
+// EventConfig overrides the top-level Claude flags for a specific event.
+// Empty fields fall back to the top-level Config values.
+type EventConfig struct {
+	AllowedTools []string `yaml:"allowedTools,omitempty"`
+	MaxTurns     int      `yaml:"maxTurns,omitempty"`
 }
 
 type GitHubConfig struct {

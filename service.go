@@ -125,15 +125,34 @@ func (svc *service) execute(ctx context.Context, req Request) (*Result, error) {
 func (svc *service) buildArgs(req Request) []string {
 	args := []string{"-p", req.Prompt}
 
-	if len(svc.cfg.AllowedTools) > 0 {
-		args = append(args, "--allowedTools", strings.Join(svc.cfg.AllowedTools, ","))
+	tools, maxTurns := svc.toolsFor(req.Event)
+	if len(tools) > 0 {
+		args = append(args, "--allowedTools", strings.Join(tools, ","))
 	}
-
-	if svc.cfg.MaxTurns > 0 {
-		args = append(args, "--max-turns", fmt.Sprintf("%d", svc.cfg.MaxTurns))
+	if maxTurns > 0 {
+		args = append(args, "--max-turns", fmt.Sprintf("%d", maxTurns))
 	}
 
 	return args
+}
+
+// toolsFor returns the allowedTools and maxTurns to use for an event.
+// Issue events read from cfg.Issue first and fall through to the top-level
+// values; other events always use the top-level values.
+func (svc *service) toolsFor(event string) ([]string, int) {
+	if event != EventIssue {
+		return svc.cfg.AllowedTools, svc.cfg.MaxTurns
+	}
+
+	tools := svc.cfg.Issue.AllowedTools
+	if len(tools) == 0 {
+		tools = svc.cfg.AllowedTools
+	}
+	maxTurns := svc.cfg.Issue.MaxTurns
+	if maxTurns == 0 {
+		maxTurns = svc.cfg.MaxTurns
+	}
+	return tools, maxTurns
 }
 
 func (svc *service) preparePrompt(req Request, workDir string, diff string) (string, error) {

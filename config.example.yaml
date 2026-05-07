@@ -5,6 +5,18 @@ allowedTools:
 - Grep
 - Bash
 maxTurns: 10
+# issue:
+#   # event=issue overrides; empty fields fall back to the top-level values.
+#   # Issue mode needs Edit/Write to actually implement tasks, and usually
+#   # benefits from more turns than CI-style review.
+#   allowedTools:
+#   - Read
+#   - Glob
+#   - Grep
+#   - Edit
+#   - Write
+#   - Bash
+#   maxTurns: 30
 # github:
 #   token: ghp_xxx        # required for event=issue; falls back to $GITHUB_TOKEN
 #   baseURL: https://api.github.com

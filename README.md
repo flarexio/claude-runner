@@ -46,6 +46,15 @@ allowedTools:
 - Grep
 - Bash
 maxTurns: 10
+# issue:
+#   allowedTools:
+#   - Read
+#   - Glob
+#   - Grep
+#   - Edit
+#   - Write
+#   - Bash
+#   maxTurns: 30
 # github:
 #   token: ghp_xxx        # required for issue events; can also be supplied via $GITHUB_TOKEN
 #   baseURL: https://api.github.com
@@ -53,6 +62,11 @@ maxTurns: 10
 
 `workDir` is optional. Defaults to `~/.flarex/claude-runner/workspaces`.
 It is a server-side setting and cannot be overridden by client requests.
+
+`issue.allowedTools` and `issue.maxTurns` only apply when `event: issue`.
+Empty fields fall back to the top-level values. Issue mode typically needs
+`Edit` and `Write` (so Claude can actually modify files) and a higher
+`maxTurns` than CI-style review.
 
 `github.token` is only needed for `event: issue` requests. If unset, the runner
 falls back to the `GITHUB_TOKEN` environment variable. `github.baseURL` defaults
