@@ -1,6 +1,6 @@
 # claude-runner
 
-A Go service that runs [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude -p`) remotely over NATS and HTTP transports. Built with [go-kit](https://gokit.io/) architecture.
+A Go service that runs [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude -p`) remotely over NATS and HTTP transports.
 
 ## Architecture
 
@@ -262,6 +262,12 @@ a GitHub token configured (see [config.yaml](#configyaml)). Results are
 posted back as a comment on the issue; `output-file` lets you also attach the
 output to the workflow run summary.
 
+The job `if:` below combines the label gate with an `author_association`
+check so the workflow only runs for issues opened by a trusted member of the
+repo (`OWNER`, `MEMBER`, or `COLLABORATOR`). This closes the gap where the
+issue author edits the body after a maintainer has labelled it: now the
+person who can edit the body is restricted to the same trusted group.
+
 ```yaml
 on:
   issues:
@@ -269,7 +275,10 @@ on:
 
 jobs:
   agent:
-    if: github.event.label.name == 'agent-ready'
+    if: |
+      github.event.label.name == 'agent-ready' &&
+      contains(fromJson('["OWNER", "MEMBER", "COLLABORATOR"]'),
+               github.event.issue.author_association)
     runs-on: ubuntu-latest
     steps:
       - name: Run Claude on issue
