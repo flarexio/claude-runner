@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-kit/kit/endpoint"
 
 	runner "github.com/flarexio/claude-runner"
 )
@@ -11,12 +12,15 @@ import (
 func AddRouters(r *gin.Engine, endpoints runner.EndpointSet) {
 	api := r.Group("/api")
 
-	api.POST("/run", runHandler(endpoints))
+	api.POST("/run", endpointHandler[runner.RunRequest](endpoints.Run))
+	api.POST("/run-issue", endpointHandler[runner.RunIssueRequest](endpoints.RunIssue))
 }
 
-func runHandler(endpoints runner.EndpointSet) gin.HandlerFunc {
+// endpointHandler binds the JSON body to T, then dispatches to ep. Each
+// endpoint has its own request type; nothing is shared at this layer.
+func endpointHandler[T any](ep endpoint.Endpoint) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req runner.Request
+		var req T
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
@@ -24,7 +28,7 @@ func runHandler(endpoints runner.EndpointSet) gin.HandlerFunc {
 
 		ctx := c.Request.Context()
 
-		resp, err := endpoints.Run(ctx, req)
+		resp, err := ep(ctx, req)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return

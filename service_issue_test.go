@@ -127,8 +127,7 @@ func TestValidateIssueRejectsExcludedLabels(t *testing.T) {
 
 func TestRunIssueRequiresGitHubClient(t *testing.T) {
 	svc := &service{cfg: Config{}, log: zap.NewNop()}
-	_, err := svc.Run(context.Background(), Request{
-		Event:       EventIssue,
+	_, err := svc.RunIssue(context.Background(), RunIssueRequest{
 		Repo:        "owner/repo",
 		IssueNumber: 1,
 	})
@@ -139,9 +138,8 @@ func TestRunIssueRequiresGitHubClient(t *testing.T) {
 
 func TestRunIssueRequiresIssueNumber(t *testing.T) {
 	svc := &service{cfg: Config{}, log: zap.NewNop(), github: &fakeGitHub{}}
-	_, err := svc.Run(context.Background(), Request{
-		Event: EventIssue,
-		Repo:  "owner/repo",
+	_, err := svc.RunIssue(context.Background(), RunIssueRequest{
+		Repo: "owner/repo",
 	})
 	if !errors.Is(err, ErrInvalidIssueNumber) {
 		t.Fatalf("err = %v, want ErrInvalidIssueNumber", err)
@@ -150,8 +148,7 @@ func TestRunIssueRequiresIssueNumber(t *testing.T) {
 
 func TestRunIssueRejectsBadRepo(t *testing.T) {
 	svc := &service{cfg: Config{}, log: zap.NewNop(), github: &fakeGitHub{}}
-	_, err := svc.Run(context.Background(), Request{
-		Event:       EventIssue,
+	_, err := svc.RunIssue(context.Background(), RunIssueRequest{
 		Repo:        "no-slash",
 		IssueNumber: 1,
 	})
@@ -164,8 +161,7 @@ func TestRunIssueValidationFailureSkipsClaim(t *testing.T) {
 	gh := &fakeGitHub{issue: &Issue{State: "closed", Body: IssueMarker}}
 	svc := &service{cfg: Config{}, log: zap.NewNop(), github: gh}
 
-	_, err := svc.Run(context.Background(), Request{
-		Event:       EventIssue,
+	_, err := svc.RunIssue(context.Background(), RunIssueRequest{
 		Repo:        "owner/repo",
 		IssueNumber: 1,
 	})
@@ -178,39 +174,48 @@ func TestRunIssueValidationFailureSkipsClaim(t *testing.T) {
 	}
 }
 
-func TestRunIssueClaimsAndExecutes(t *testing.T) {
+func TestRunIssueAcceptsSyncAndCompletesInBackground(t *testing.T) {
 	gh := &fakeGitHub{issue: validIssue()}
 	workspaces := t.TempDir()
 	svc := &service{cfg: Config{WorkDir: workspaces}, log: zap.NewNop(), github: gh}
 
 	prependFakeClaude(t, 0)
 
-	result, err := svc.Run(context.Background(), Request{
-		Event:       EventIssue,
+	result, err := svc.RunIssue(context.Background(), RunIssueRequest{
 		Repo:        newRemoteRepo(t),
 		IssueNumber: 42,
 	})
 	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+		t.Fatalf("RunIssue() error = %v", err)
 	}
-	if result.Error != "" {
-		t.Fatalf("result.Error = %q, want empty", result.Error)
+	if result.ID == "" {
+		t.Fatal("result.ID is empty, want non-empty for accepted issue")
+	}
+	if !strings.Contains(result.Output, "accepted") {
+		t.Fatalf("result.Output = %q, want accepted message", result.Output)
 	}
 
+	// Claim happened synchronously, before RunIssue returned.
 	if got, want := gh.removed, []string{LabelAgentReady}; !sliceEqual(got, want) {
 		t.Fatalf("removed = %v, want %v", got, want)
 	}
 	if !slices.Contains(gh.added, LabelClaimedByClaude) {
 		t.Fatalf("added does not include claimed-by-claude: %v", gh.added)
 	}
+	if len(gh.comments) < 1 || !strings.Contains(gh.comments[0], "claimed") {
+		t.Fatalf("first comment must be the claim message: %v", gh.comments)
+	}
+
+	// Drain the background goroutine before checking the success comment.
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
 	if slices.Contains(gh.added, LabelAgentFailed) {
 		t.Fatalf("added unexpectedly includes agent-failed: %v", gh.added)
 	}
 	if len(gh.comments) < 2 {
 		t.Fatalf("expected claim + result comments, got %d: %v", len(gh.comments), gh.comments)
-	}
-	if !strings.Contains(gh.comments[0], "claimed") {
-		t.Fatalf("first comment = %q, want claim message", gh.comments[0])
 	}
 	if !strings.Contains(gh.comments[len(gh.comments)-1], "finished") {
 		t.Fatalf("last comment = %q, want success summary", gh.comments[len(gh.comments)-1])
@@ -224,17 +229,17 @@ func TestRunIssueReportsFailure(t *testing.T) {
 
 	prependFakeClaude(t, 1)
 
-	result, err := svc.Run(context.Background(), Request{
-		Event:       EventIssue,
+	if _, err := svc.RunIssue(context.Background(), RunIssueRequest{
 		Repo:        newRemoteRepo(t),
 		IssueNumber: 42,
-	})
-	if err != nil {
-		t.Fatalf("Run() error = %v", err)
+	}); err != nil {
+		t.Fatalf("RunIssue() error = %v", err)
 	}
-	if result.Error == "" {
-		t.Fatal("result.Error is empty, want failure")
+
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
+
 	if !slices.Contains(gh.added, LabelAgentFailed) {
 		t.Fatalf("added does not include agent-failed: %v", gh.added)
 	}
@@ -244,14 +249,14 @@ func TestRunIssueReportsFailure(t *testing.T) {
 	}
 }
 
-func TestRunPromptUnaffectedByIssueRouting(t *testing.T) {
+func TestRunPromptDoesNotTouchGitHub(t *testing.T) {
 	workspaces := t.TempDir()
 	gh := &fakeGitHub{}
 	svc := &service{cfg: Config{WorkDir: workspaces}, log: zap.NewNop(), github: gh}
 
 	prependFakeClaude(t, 0)
 
-	result, err := svc.Run(context.Background(), Request{
+	result, err := svc.Run(context.Background(), RunRequest{
 		Prompt: "Run tests",
 	})
 	if err != nil {
@@ -265,9 +270,9 @@ func TestRunPromptUnaffectedByIssueRouting(t *testing.T) {
 	}
 }
 
-func TestRunPromptStillRequiresPrompt(t *testing.T) {
+func TestRunRequiresPrompt(t *testing.T) {
 	svc := &service{cfg: Config{}, log: zap.NewNop()}
-	_, err := svc.Run(context.Background(), Request{})
+	_, err := svc.Run(context.Background(), RunRequest{})
 	if !errors.Is(err, ErrInvalidPrompt) {
 		t.Fatalf("err = %v, want ErrInvalidPrompt", err)
 	}

@@ -5,10 +5,20 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/oklog/ulid/v2"
 	"go.uber.org/zap"
 )
 
-func (svc *service) runIssue(ctx context.Context, req Request) (*Result, error) {
+// RunIssue handles a GitHub issue task. It performs validation and the
+// claim protocol synchronously (so the caller learns immediately if the
+// request is malformed or the issue cannot be claimed), then kicks off
+// Claude execution in a tracked background goroutine and returns an
+// "accepted" Result. Final success/failure is reported as a comment on
+// the issue itself.
+//
+// Use Service.Close to wait for in-flight background work — required for
+// one-shot CLI invocations and graceful daemon shutdown.
+func (svc *service) RunIssue(ctx context.Context, req RunIssueRequest) (*Result, error) {
 	if svc.github == nil {
 		return nil, ErrGitHubUnavailable
 	}
@@ -21,41 +31,55 @@ func (svc *service) runIssue(ctx context.Context, req Request) (*Result, error) 
 		return nil, ErrInvalidIssueNumber
 	}
 
-	log := svc.log.With(
-		zap.String("repo", slug),
-		zap.Int("issue_number", req.IssueNumber),
-	)
-
 	issue, err := svc.github.GetIssue(ctx, slug, req.IssueNumber)
 	if err != nil {
 		return nil, fmt.Errorf("fetch issue: %w", err)
 	}
-
 	if err := validateIssue(issue); err != nil {
 		return nil, err
 	}
-
 	if err := svc.claimIssue(ctx, slug, req.IssueNumber); err != nil {
 		return nil, fmt.Errorf("claim issue: %w", err)
 	}
 
-	exec := req
-	exec.Prompt = buildIssuePrompt(slug, issue)
+	runID := ulid.Make().String()
 
-	result, runErr := svc.execute(ctx, exec)
-	if runErr != nil {
-		log.Error("execute failed", zap.Error(runErr))
-		svc.reportIssueFailure(ctx, slug, req.IssueNumber, runErr.Error())
-		return nil, runErr
+	// Translate to the internal RunRequest that execute consumes. Event is
+	// set so claudeArgs picks up the issue-specific overrides and so
+	// preparePrompt skips the PR trailer.
+	exec := RunRequest{
+		Prompt: buildIssuePrompt(slug, issue),
+		Repo:   req.Repo,
+		Ref:    req.Ref,
+		Event:  EventIssue,
 	}
 
-	if result.Error != "" {
-		svc.reportIssueFailure(ctx, slug, req.IssueNumber, result.Error)
-	} else {
-		svc.reportIssueSuccess(ctx, slug, req.IssueNumber, result.Output)
-	}
+	svc.launchBg(func(bgCtx context.Context) {
+		log := svc.log.With(
+			zap.String("repo", slug),
+			zap.Int("issue_number", req.IssueNumber),
+			zap.String("id", runID),
+		)
 
-	return result, nil
+		result, runErr := svc.execute(bgCtx, exec)
+		if runErr != nil {
+			log.Error("execute failed", zap.Error(runErr))
+			svc.reportIssueFailure(bgCtx, slug, req.IssueNumber, runErr.Error())
+			return
+		}
+		if result.Error != "" {
+			log.Warn("claude reported error", zap.String("error", result.Error))
+			svc.reportIssueFailure(bgCtx, slug, req.IssueNumber, result.Error)
+			return
+		}
+		log.Info("issue completed")
+		svc.reportIssueSuccess(bgCtx, slug, req.IssueNumber, result.Output)
+	})
+
+	return &Result{
+		ID:     runID,
+		Output: fmt.Sprintf("Issue %s#%d accepted; claude-runner is processing in the background.", slug, req.IssueNumber),
+	}, nil
 }
 
 func validateIssue(issue *Issue) error {
