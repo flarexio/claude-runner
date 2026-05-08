@@ -1,10 +1,18 @@
 # workDir: ~/.flarex/claude-runner/workspaces
+
 allowedTools:
 - Read
 - Glob
 - Grep
 - Bash
+
 maxTurns: 10
+
+# Optional. Passed to claude as --model. Accepts a model id
+# (e.g. claude-sonnet-4-6, claude-opus-4-7) or an alias (sonnet, opus,
+# haiku). Omit to let claude pick its default.
+# model: claude-sonnet-4-6
+
 # event=issue overrides. Empty fields fall back to the top-level values.
 # Issue mode needs Edit/Write to actually implement tasks, and usually
 # benefits from more turns than CI-style review.
@@ -15,6 +23,7 @@ maxTurns: 10
 issue:
   bypassPermissions: false
   maxTurns: 30
+  # model: claude-opus-4-7
   # allowedTools:
   # - Read
   # - Glob
@@ -22,6 +31,7 @@ issue:
   # - Edit
   # - Write
   # - Bash
+
 # github:
 #   token: ghp_xxx        # required for event=issue; falls back to $GITHUB_TOKEN
 #   baseURL: https://api.github.com

@@ -49,6 +49,7 @@ type Config struct {
 	WorkDir      string       `yaml:"workDir"`
 	AllowedTools []string     `yaml:"allowedTools"`
 	MaxTurns     int          `yaml:"maxTurns"`
+	Model        string       `yaml:"model,omitempty"`
 	Issue        EventConfig  `yaml:"issue,omitempty"`
 	GitHub       GitHubConfig `yaml:"github,omitempty"`
 }
@@ -63,6 +64,7 @@ type Config struct {
 type EventConfig struct {
 	AllowedTools      []string `yaml:"allowedTools,omitempty"`
 	MaxTurns          int      `yaml:"maxTurns,omitempty"`
+	Model             string   `yaml:"model,omitempty"`
 	BypassPermissions bool     `yaml:"bypassPermissions,omitempty"`
 }
 

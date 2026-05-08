@@ -147,6 +147,9 @@ func (svc *service) buildArgs(req RunRequest) []string {
 	if cfg.MaxTurns > 0 {
 		args = append(args, "--max-turns", fmt.Sprintf("%d", cfg.MaxTurns))
 	}
+	if cfg.Model != "" {
+		args = append(args, "--model", cfg.Model)
+	}
 
 	return args
 }
@@ -159,6 +162,7 @@ func (svc *service) eventConfig(event string) EventConfig {
 		return EventConfig{
 			AllowedTools: svc.cfg.AllowedTools,
 			MaxTurns:     svc.cfg.MaxTurns,
+			Model:        svc.cfg.Model,
 		}
 	}
 
@@ -168,6 +172,9 @@ func (svc *service) eventConfig(event string) EventConfig {
 	}
 	if resolved.MaxTurns == 0 {
 		resolved.MaxTurns = svc.cfg.MaxTurns
+	}
+	if resolved.Model == "" {
+		resolved.Model = svc.cfg.Model
 	}
 	return resolved
 }

@@ -80,6 +80,57 @@ func TestBuildArgsNonIssueIgnoresIssueOverride(t *testing.T) {
 	}
 }
 
+func TestBuildArgsTopLevelModel(t *testing.T) {
+	svc := &service{cfg: Config{
+		AllowedTools: []string{"Read"},
+		MaxTurns:     10,
+		Model:        "claude-sonnet-4-6",
+	}}
+
+	args := svc.buildArgs(RunRequest{Prompt: "p", Event: "pull_request"})
+
+	want := []string{"-p", "p", "--allowedTools", "Read", "--max-turns", "10", "--model", "claude-sonnet-4-6"}
+	if !sliceEqual(args, want) {
+		t.Fatalf("args = %v, want %v", args, want)
+	}
+}
+
+func TestBuildArgsIssueModelOverride(t *testing.T) {
+	svc := &service{cfg: Config{
+		AllowedTools: []string{"Read"},
+		MaxTurns:     10,
+		Model:        "claude-sonnet-4-6",
+		Issue: EventConfig{
+			Model: "claude-opus-4-7",
+		},
+	}}
+
+	args := svc.buildArgs(RunRequest{Prompt: "p", Event: EventIssue})
+
+	want := []string{"-p", "p", "--allowedTools", "Read", "--max-turns", "10", "--model", "claude-opus-4-7"}
+	if !sliceEqual(args, want) {
+		t.Fatalf("args = %v, want %v", args, want)
+	}
+}
+
+func TestBuildArgsIssueModelFallsBackToTopLevel(t *testing.T) {
+	svc := &service{cfg: Config{
+		AllowedTools: []string{"Read"},
+		MaxTurns:     10,
+		Model:        "claude-sonnet-4-6",
+		Issue: EventConfig{
+			MaxTurns: 30,
+		},
+	}}
+
+	args := svc.buildArgs(RunRequest{Prompt: "p", Event: EventIssue})
+
+	want := []string{"-p", "p", "--allowedTools", "Read", "--max-turns", "30", "--model", "claude-sonnet-4-6"}
+	if !sliceEqual(args, want) {
+		t.Fatalf("args = %v, want %v", args, want)
+	}
+}
+
 func sliceEqual(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
