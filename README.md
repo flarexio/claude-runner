@@ -46,21 +46,9 @@ allowedTools:
 - Grep
 - Bash
 maxTurns: 10
-# issue:
-#   bypassPermissions: true
-#   maxTurns: 30
-#   # Or, if you prefer a curated tool list over bypassing permissions:
-#   # bypassPermissions: false
-#   # allowedTools:
-#   # - Read
-#   # - Glob
-#   # - Grep
-#   # - Edit
-#   # - Write
-#   # - Bash
-# github:
-#   token: ghp_xxx        # required for issue events; can also be supplied via $GITHUB_TOKEN
-#   baseURL: https://api.github.com
+issue:
+  bypassPermissions: true
+  maxTurns: 30
 ```
 
 `workDir` is optional. Defaults to `~/.flarex/claude-runner/workspaces`.
@@ -68,20 +56,18 @@ It is a server-side setting and cannot be overridden by client requests.
 
 `issue.allowedTools`, `issue.maxTurns`, and `issue.bypassPermissions` only
 apply when `event: issue`. Empty fields fall back to the top-level values.
-Issue mode typically needs `Edit` and `Write` (so Claude can actually modify
-files) and a higher `maxTurns` than CI-style review.
 
-`issue.bypassPermissions: true` passes `--dangerously-skip-permissions` to
-`claude` and ignores `allowedTools`. This mirrors how Claude Code is normally
-used in interactive development, where a human watches each tool call. In
+`issue.bypassPermissions: true` (shown above) passes
+`--dangerously-skip-permissions` to `claude` and ignores `allowedTools`,
+mirroring how Claude Code is normally used in interactive development. In
 issue mode no human is on the call path, so only enable bypass when the
 trigger is gated to trusted members (label gate plus the
 `author_association` check in the [Issue Mode action example](#issue-mode))
 and the runner's GitHub token is restricted to non-destructive operations.
 
-`github.token` is only needed for `event: issue` requests. If unset, the runner
-falls back to the `GITHUB_TOKEN` environment variable. `github.baseURL` defaults
-to the public GitHub API and may be set to a GitHub Enterprise host.
+If you prefer a curated tool list, set `bypassPermissions: false` and
+spell out `issue.allowedTools` (Issue mode needs `Edit` and `Write` to
+implement tasks, which the top-level fallback list does not include).
 
 ## Execution Modes
 

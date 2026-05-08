@@ -5,26 +5,23 @@ allowedTools:
 - Grep
 - Bash
 maxTurns: 10
-# issue:
-#   # event=issue overrides; empty fields fall back to the top-level values.
-#   # Issue mode needs Edit/Write to actually implement tasks, and usually
-#   # benefits from more turns than CI-style review.
-#   #
-#   # bypassPermissions: true passes --dangerously-skip-permissions to claude
-#   # (no per-tool prompts, ignores allowedTools). Only safe behind the
-#   # label + author_association gates documented in the README.
-#   bypassPermissions: true
-#   maxTurns: 30
-#   # allowedTools is ignored when bypassPermissions is true. If you keep the
-#   # gate-based curation instead, set bypassPermissions: false and list the
-#   # tools explicitly:
-#   # allowedTools:
-#   # - Read
-#   # - Glob
-#   # - Grep
-#   # - Edit
-#   # - Write
-#   # - Bash
+# event=issue overrides. Empty fields fall back to the top-level values.
+# Issue mode needs Edit/Write to actually implement tasks, and usually
+# benefits from more turns than CI-style review.
+#
+# bypassPermissions: true passes --dangerously-skip-permissions to claude
+# (no per-tool prompts, ignores allowedTools). Only safe behind the label
+# + author_association gates documented in the README.
+issue:
+  bypassPermissions: false
+  maxTurns: 30
+  # allowedTools:
+  # - Read
+  # - Glob
+  # - Grep
+  # - Edit
+  # - Write
+  # - Bash
 # github:
 #   token: ghp_xxx        # required for event=issue; falls back to $GITHUB_TOKEN
 #   baseURL: https://api.github.com
