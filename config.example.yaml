@@ -26,8 +26,9 @@ issue:
   # preserveOnFailure keeps the cloned workspace under workDir when the
   # claude run exits non-zero, so an operator can inspect the failed run
   # before retriggering. Successful issue runs still clean up. CI / PR
-  # review cleanup is unaffected.
-  # preserveOnFailure: false
+  # review cleanup is unaffected. Defaults to true when omitted; set to
+  # false to opt out and clean up failed issue workspaces too.
+  preserveOnFailure: true
   # model: claude-opus-4-7
   # modelLabels maps optional issue labels to Claude model ids or aliases.
   # If an issue has no model label, or its label is not mapped here, issue.model

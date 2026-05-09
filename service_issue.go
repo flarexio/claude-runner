@@ -105,7 +105,7 @@ func (svc *service) runIssueWorkflow(ctx context.Context, req RunIssueRequest) (
 
 func (svc *service) runIssueExecution(ctx context.Context, req RunRequest) (*Result, workspaceOutcome, error) {
 	return svc.runClaudeInTemporaryWorkspace(ctx, req, runOptions{
-		preserveOnFailure: svc.cfg.Issue.PreserveOnFailure,
+		preserveOnFailure: svc.cfg.Issue.PreserveOnFailureOrDefault(),
 	})
 }
 

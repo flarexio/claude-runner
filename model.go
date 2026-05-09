@@ -76,14 +76,27 @@ type Config struct {
 // PreserveOnFailure (issue mode only) keeps the cloned workspace under
 // WorkDir when claude exits non-zero, so an operator can inspect the run
 // before re-triggering. Successful runs still clean up. CI / PR review
-// runs ignore this flag and always clean up.
+// runs ignore this flag and always clean up. The pointer type lets us
+// distinguish an omitted setting (nil → defaults to true; the failed
+// workspace is the best debugging artifact) from an explicit
+// preserveOnFailure: false opt-out.
 type EventConfig struct {
 	AllowedTools      []string          `yaml:"allowedTools,omitempty"`
 	MaxTurns          int               `yaml:"maxTurns,omitempty"`
 	Model             string            `yaml:"model,omitempty"`
 	ModelLabels       map[string]string `yaml:"modelLabels,omitempty"`
 	BypassPermissions bool              `yaml:"bypassPermissions,omitempty"`
-	PreserveOnFailure bool              `yaml:"preserveOnFailure,omitempty"`
+	PreserveOnFailure *bool             `yaml:"preserveOnFailure,omitempty"`
+}
+
+// PreserveOnFailureOrDefault resolves PreserveOnFailure to a concrete bool,
+// applying the runtime default of true for issue mode when the field is
+// omitted.
+func (c EventConfig) PreserveOnFailureOrDefault() bool {
+	if c.PreserveOnFailure == nil {
+		return true
+	}
+	return *c.PreserveOnFailure
 }
 
 type GitHubConfig struct {

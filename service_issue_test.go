@@ -366,9 +366,11 @@ func TestRunIssueReportsFailure(t *testing.T) {
 	}
 }
 
-func TestRunIssueRemovesWorkspaceOnFailureByDefault(t *testing.T) {
+func TestRunIssuePreservesWorkspaceOnFailureByDefault(t *testing.T) {
 	gh := &fakeGitHub{issue: validIssue()}
 	workspaces := t.TempDir()
+	// Issue config left zero-valued so PreserveOnFailure is nil; the
+	// runtime default should preserve the failed workspace.
 	svc := &service{cfg: Config{WorkDir: workspaces}, log: zap.NewNop(), github: gh}
 
 	prependFakeClaude(t, 1)
@@ -387,8 +389,52 @@ func TestRunIssueRemovesWorkspaceOnFailureByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read workspaces: %v", err)
 	}
+	if len(entries) == 0 {
+		t.Fatal("expected preserved workspace under default config, found none")
+	}
+
+	failure := gh.comments[len(gh.comments)-1]
+	if !strings.Contains(failure, "Workspace preserved") {
+		t.Fatalf("failure comment = %q, want preservation hint by default", failure)
+	}
+	for _, entry := range entries {
+		if strings.Contains(failure, entry.Name()) {
+			t.Fatalf("failure comment %q exposes workspace dir name %q", failure, entry.Name())
+		}
+	}
+}
+
+func TestRunIssueRemovesWorkspaceOnFailureWhenDisabled(t *testing.T) {
+	gh := &fakeGitHub{issue: validIssue()}
+	workspaces := t.TempDir()
+	disabled := false
+	svc := &service{
+		cfg: Config{
+			WorkDir: workspaces,
+			Issue:   EventConfig{PreserveOnFailure: &disabled},
+		},
+		log:    zap.NewNop(),
+		github: gh,
+	}
+
+	prependFakeClaude(t, 1)
+
+	if _, err := svc.RunIssue(context.Background(), RunIssueRequest{
+		Repo:        newRemoteRepo(t),
+		IssueNumber: 42,
+	}); err != nil {
+		t.Fatalf("RunIssue() error = %v", err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	entries, err := os.ReadDir(workspaces)
+	if err != nil {
+		t.Fatalf("read workspaces: %v", err)
+	}
 	if len(entries) != 0 {
-		t.Fatalf("expected workspace to be cleaned up by default, got %d entries: %v",
+		t.Fatalf("expected workspace to be cleaned up when preserveOnFailure=false, got %d entries: %v",
 			len(entries), entries)
 	}
 
@@ -398,13 +444,14 @@ func TestRunIssueRemovesWorkspaceOnFailureByDefault(t *testing.T) {
 	}
 }
 
-func TestRunIssuePreservesWorkspaceOnFailureWhenConfigured(t *testing.T) {
+func TestRunIssuePreservesWorkspaceOnFailureWhenExplicitlyEnabled(t *testing.T) {
 	gh := &fakeGitHub{issue: validIssue()}
 	workspaces := t.TempDir()
+	enabled := true
 	svc := &service{
 		cfg: Config{
 			WorkDir: workspaces,
-			Issue:   EventConfig{PreserveOnFailure: true},
+			Issue:   EventConfig{PreserveOnFailure: &enabled},
 		},
 		log:    zap.NewNop(),
 		github: gh,
@@ -434,24 +481,14 @@ func TestRunIssuePreservesWorkspaceOnFailureWhenConfigured(t *testing.T) {
 	if !strings.Contains(failure, "Workspace preserved") {
 		t.Fatalf("failure comment = %q, want preservation hint", failure)
 	}
-	for _, entry := range entries {
-		if strings.Contains(failure, entry.Name()) {
-			t.Fatalf("failure comment %q exposes workspace dir name %q", failure, entry.Name())
-		}
-	}
 }
 
-func TestRunIssueRemovesWorkspaceOnSuccessWithPreserveConfigured(t *testing.T) {
+func TestRunIssueRemovesWorkspaceOnSuccessByDefault(t *testing.T) {
 	gh := &fakeGitHub{issue: validIssue()}
 	workspaces := t.TempDir()
-	svc := &service{
-		cfg: Config{
-			WorkDir: workspaces,
-			Issue:   EventConfig{PreserveOnFailure: true},
-		},
-		log:    zap.NewNop(),
-		github: gh,
-	}
+	// Default config (PreserveOnFailure nil → preserve on failure).
+	// Successful runs must still clean up.
+	svc := &service{cfg: Config{WorkDir: workspaces}, log: zap.NewNop(), github: gh}
 
 	prependFakeClaude(t, 0)
 
@@ -472,6 +509,20 @@ func TestRunIssueRemovesWorkspaceOnSuccessWithPreserveConfigured(t *testing.T) {
 	if len(entries) != 0 {
 		t.Fatalf("expected successful run to clean up workspace, got %d entries: %v",
 			len(entries), entries)
+	}
+}
+
+func TestPreserveOnFailureOrDefault(t *testing.T) {
+	if got := (EventConfig{}).PreserveOnFailureOrDefault(); got != true {
+		t.Fatalf("PreserveOnFailureOrDefault() with nil = %v, want true", got)
+	}
+	yes := true
+	if got := (EventConfig{PreserveOnFailure: &yes}).PreserveOnFailureOrDefault(); got != true {
+		t.Fatalf("PreserveOnFailureOrDefault() with *true = %v, want true", got)
+	}
+	no := false
+	if got := (EventConfig{PreserveOnFailure: &no}).PreserveOnFailureOrDefault(); got != false {
+		t.Fatalf("PreserveOnFailureOrDefault() with *false = %v, want false", got)
 	}
 }
 
