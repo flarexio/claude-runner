@@ -70,9 +70,10 @@ top and override it for issue runs only when you need a different model
 `--dangerously-skip-permissions` to `claude` and ignores `allowedTools`,
 mirroring how Claude Code is normally used in interactive development. In
 issue mode no human is on the call path, so only enable bypass when the
-trigger is gated to trusted members (label gate plus the
-`author_association` check in the [Issue Mode action example](#issue-mode))
-and the runner's GitHub token is restricted to non-destructive operations.
+trigger is gated to trusted members (the `agent-ready` label gate in the
+[Issue Mode action example](#issue-mode), since only users with write access
+can apply labels) and the runner's GitHub token is restricted to
+non-destructive operations.
 
 If you prefer a curated tool list, set `bypassPermissions: false` and
 spell out `issue.allowedTools` (Issue mode needs `Edit` and `Write` to
@@ -302,11 +303,9 @@ a GitHub token configured (see [config.yaml](#configyaml)). Results are
 posted back as a comment on the issue; `output-file` lets you also attach the
 output to the workflow run summary.
 
-The job `if:` below combines the label gate with an `author_association`
-check so the workflow only runs for issues opened by a trusted member of the
-repo (`OWNER`, `MEMBER`, or `COLLABORATOR`). This closes the gap where the
-issue author edits the body after a maintainer has labelled it: now the
-person who can edit the body is restricted to the same trusted group.
+The job `if:` below gates on the `agent-ready` label so the workflow only
+fires when a maintainer adds that label. Only repository members with write
+access can apply labels, so this restricts who can trigger an agent run.
 
 ```yaml
 on:
@@ -315,10 +314,7 @@ on:
 
 jobs:
   agent:
-    if: |
-      github.event.label.name == 'agent-ready' &&
-      contains(fromJson('["OWNER", "MEMBER", "COLLABORATOR"]'),
-               github.event.issue.author_association)
+    if: github.event.label.name == 'agent-ready'
     runs-on: ubuntu-latest
     steps:
       - name: Run Claude on issue
