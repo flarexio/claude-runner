@@ -64,7 +64,7 @@ func (svc *service) runIssueWorkflow(ctx context.Context, req RunIssueRequest) (
 			zap.String("model", selectedModel),
 		)
 
-		result, ws, runErr := svc.runIssueExecution(bgCtx, exec)
+		result, ws, runErr := svc.runIssueExecution(bgCtx, exec, slug, req.IssueNumber)
 		if runErr != nil {
 			log.Error("issue execution failed", zap.Error(runErr))
 			svc.reportIssueFailure(bgCtx, slug, req.IssueNumber, issueFailureReport{
@@ -93,10 +93,18 @@ func (svc *service) runIssueWorkflow(ctx context.Context, req RunIssueRequest) (
 	}, nil
 }
 
-func (svc *service) runIssueExecution(ctx context.Context, req RunRequest) (*Result, workspaceOutcome, error) {
+func (svc *service) runIssueExecution(ctx context.Context, req RunRequest, slug string, issueNumber int) (*Result, workspaceOutcome, error) {
 	return svc.runClaudeInTemporaryWorkspace(ctx, req, runOptions{
 		preserveOnFailure: svc.cfg.Issue.PreserveOnFailure,
+		issueTaskID:       issueTaskID(slug, issueNumber),
 	})
+}
+
+// issueTaskID returns the stable workspace key for an issue task.
+// slug must be the normalized "owner/repo" form.
+func issueTaskID(slug string, number int) string {
+	parts := strings.SplitN(slug, "/", 2)
+	return fmt.Sprintf("gh-issue-%s-%s-%d", parts[0], parts[1], number)
 }
 
 func validateIssue(issue *Issue) error {

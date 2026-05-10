@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -474,6 +475,134 @@ func TestBuildIssueFailureCommentOmitsPreservationWhenNotPreserved(t *testing.T)
 	if !strings.Contains(body, "Run ID: `01ABC`") {
 		t.Fatalf("body missing run id:\n%s", body)
 	}
+}
+
+func TestIssueTaskIDFormat(t *testing.T) {
+	got := issueTaskID("flarexio/claude-runner", 8)
+	if want := "gh-issue-flarexio-claude-runner-8"; got != want {
+		t.Fatalf("issueTaskID() = %q, want %q", got, want)
+	}
+}
+
+func TestRunIssueWritesStableLayout(t *testing.T) {
+	gh := &fakeGitHub{issue: validIssue()}
+	workspaces := t.TempDir()
+	// Force preservation so we can inspect the layout after a failed claude run.
+	svc := &service{cfg: Config{WorkDir: workspaces, Issue: EventConfig{PreserveOnFailure: true}}, log: zap.NewNop(), github: gh}
+
+	prependFakeClaude(t, 1)
+
+	repo := newRemoteRepo(t)
+	if _, err := svc.RunIssue(context.Background(), RunIssueRequest{
+		Repo:        repo,
+		IssueNumber: 42,
+	}); err != nil {
+		t.Fatalf("RunIssue() error = %v", err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	slug, err := NormalizeRepo(repo)
+	if err != nil {
+		t.Fatalf("NormalizeRepo: %v", err)
+	}
+	taskRoot := filepath.Join(workspaces, issueTaskID(slug, 42))
+	if _, err := os.Stat(taskRoot); err != nil {
+		t.Fatalf("task root missing: %v", err)
+	}
+	repoDir := filepath.Join(taskRoot, "repo")
+	if info, err := os.Stat(repoDir); err != nil || !info.IsDir() {
+		t.Fatalf("repo/ subdir missing: stat err=%v info=%v", err, info)
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, ".git")); err != nil {
+		t.Fatalf(".git/ missing under repo/: %v", err)
+	}
+	// .claude-runner/ must not live inside the git worktree.
+	if _, err := os.Stat(filepath.Join(repoDir, ".claude-runner")); !os.IsNotExist(err) {
+		t.Fatalf(".claude-runner/ unexpectedly under repo/: stat err=%v", err)
+	}
+}
+
+func TestRunIssueTaskIDIsStableAcrossRetries(t *testing.T) {
+	gh := &fakeGitHub{issue: validIssue()}
+	workspaces := t.TempDir()
+	svc := &service{cfg: Config{WorkDir: workspaces, Issue: EventConfig{PreserveOnFailure: true}}, log: zap.NewNop(), github: gh}
+	prependFakeClaude(t, 1)
+
+	repo := newRemoteRepo(t)
+	if _, err := svc.RunIssue(context.Background(), RunIssueRequest{
+		Repo: repo, IssueNumber: 42,
+	}); err != nil {
+		t.Fatalf("RunIssue() #1 error = %v", err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close() #1 error = %v", err)
+	}
+
+	// Reset the fake GitHub so a fresh issue passes claim again.
+	gh = &fakeGitHub{issue: validIssue()}
+	svc.github = gh
+
+	if _, err := svc.RunIssue(context.Background(), RunIssueRequest{
+		Repo: repo, IssueNumber: 42,
+	}); err != nil {
+		t.Fatalf("RunIssue() #2 error = %v", err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close() #2 error = %v", err)
+	}
+
+	entries, err := os.ReadDir(workspaces)
+	if err != nil {
+		t.Fatalf("read workspaces: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d workspace entries, want 1 stable task root: %v", len(entries), entries)
+	}
+	slug, _ := NormalizeRepo(repo)
+	if got, want := entries[0].Name(), issueTaskID(slug, 42); got != want {
+		t.Fatalf("workspace name = %q, want stable %q", got, want)
+	}
+}
+
+func TestResolveWorkspacePaths(t *testing.T) {
+	svc := &service{cfg: Config{WorkDir: "/ws"}}
+
+	t.Run("issue mode uses stable taskRoot/repo", func(t *testing.T) {
+		root, work := svc.resolveWorkspacePaths(
+			RunRequest{Repo: "git@github.com:o/r.git", Event: EventIssue},
+			runOptions{issueTaskID: "gh-issue-o-r-42"},
+			"01ABC",
+		)
+		if want := filepath.Join("/ws", "gh-issue-o-r-42"); root != want {
+			t.Fatalf("taskRoot = %q, want %q", root, want)
+		}
+		if want := filepath.Join("/ws", "gh-issue-o-r-42", "repo"); work != want {
+			t.Fatalf("workDir = %q, want %q", work, want)
+		}
+	})
+
+	t.Run("CI / PR review mode keeps ULID flat layout", func(t *testing.T) {
+		root, work := svc.resolveWorkspacePaths(
+			RunRequest{Repo: "git@github.com:o/r.git"},
+			runOptions{},
+			"01ABC",
+		)
+		if want := filepath.Join("/ws", "01ABC"); root != want {
+			t.Fatalf("taskRoot = %q, want %q", root, want)
+		}
+		if root != work {
+			t.Fatalf("CI mode should not introduce a repo/ subdir: workDir=%q taskRoot=%q", work, root)
+		}
+	})
+
+	t.Run("existing-workspace mode reuses cfg.WorkDir", func(t *testing.T) {
+		root, work := svc.resolveWorkspacePaths(RunRequest{}, runOptions{}, "01ABC")
+		if root != "/ws" || work != "/ws" {
+			t.Fatalf("existing-workspace mode = (%q,%q), want both /ws", root, work)
+		}
+	})
 }
 
 func TestRunPromptDoesNotTouchGitHub(t *testing.T) {

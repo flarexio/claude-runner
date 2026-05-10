@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 func TestBuildArgsUsesIssueOverride(t *testing.T) {
@@ -243,12 +245,12 @@ func TestGenerateDiffFromBaseRef(t *testing.T) {
 	workspaces := t.TempDir()
 	svc := &service{cfg: Config{WorkDir: workspaces}}
 
-	workDir, err := svc.prepareWorkDir(context.Background(), RunRequest{
+	workDir := filepath.Join(workspaces, "run")
+	if err := svc.prepareWorkDir(context.Background(), RunRequest{
 		Repo:    remote,
 		Ref:     "feature/review",
 		BaseRef: "main",
-	}, "run")
-	if err != nil {
+	}, workDir); err != nil {
 		t.Fatalf("prepareWorkDir() error = %v", err)
 	}
 
@@ -306,18 +308,16 @@ func TestRunRemovesClonedWorkDirAfterClaudeFailure(t *testing.T) {
 
 func TestPrepareWorkDirRemovesFailedClone(t *testing.T) {
 	workspaces := t.TempDir()
-	svc := &service{cfg: Config{WorkDir: workspaces}}
+	svc := &service{cfg: Config{WorkDir: workspaces}, log: zap.NewNop()}
 
-	workDir, err := svc.prepareWorkDir(context.Background(), RunRequest{
+	workDir := filepath.Join(workspaces, "run")
+	err := svc.prepareWorkDir(context.Background(), RunRequest{
 		Repo: filepath.Join(t.TempDir(), "missing.git"),
-	}, "run")
+	}, workDir)
 	if err == nil {
 		t.Fatal("prepareWorkDir() error = nil")
 	}
-	if workDir != "" {
-		t.Fatalf("workDir = %q, want empty", workDir)
-	}
-	if _, err := os.Stat(filepath.Join(workspaces, "run")); !os.IsNotExist(err) {
+	if _, err := os.Stat(workDir); !os.IsNotExist(err) {
 		t.Fatalf("failed clone workspace was not removed, stat err = %v", err)
 	}
 }

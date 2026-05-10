@@ -59,16 +59,17 @@ Issue mode prompts are **always built server-side** by `buildIssuePrompt` from t
 
 ### Workspace lifecycle
 
-Both `Run` and `RunIssue` execute Claude through the shared helper `runClaudeInTemporaryWorkspace(ctx, req, opts)` (`service.go`). `prepareWorkDir` clones into `cfg.WorkDir/<ulid>` when `req.Repo` is set, and the helper's deferred cleanup runs `os.RemoveAll` only on the cloned path — never on the configured `WorkDir`. When `req.Repo` is empty (existing-workspace mode), the helper does not own the directory and never removes it.
+Both `Run` and `RunIssue` execute Claude through the shared helper `runClaudeInTemporaryWorkspace(ctx, req, opts)` (`service.go`), which resolves `(taskRoot, workDir)` via `resolveWorkspacePaths`:
 
-Cleanup is gated by `runOptions.preserveOnFailure`:
+- **Stateless / CI / PR review** (`runStateless`, `runOptions{}`): per-run ULID, flat — `taskRoot == workDir == <cfg.WorkDir>/<ulid>`. Always cleaned up.
+- **Issue execution** (`runIssueExecution`, `runOptions{issueTaskID: gh-issue-<owner>-<repo>-<n>, preserveOnFailure: cfg.Issue.PreserveOnFailure}`): stable layout — `taskRoot = <cfg.WorkDir>/<issueTaskID>`, `workDir = <taskRoot>/repo`. The git checkout lives under `repo/` so the task root can hold sibling runner metadata (e.g. `.claude-runner/`) outside the worktree. Future state-persistence work hangs off the task root, not the checkout.
+- **Existing-workspace mode** (`req.Repo == ""`): both paths equal `cfg.WorkDir`; the helper never removes it.
 
-- **Stateless / CI / PR review** (`runStateless`) passes the zero-value `runOptions{}` — the cloned workspace is always removed, success or failure.
-- **Issue execution** (`runIssueExecution`) passes `runOptions{preserveOnFailure: cfg.Issue.PreserveOnFailure}`. When that is true and `claude` exits non-zero, the helper sets `ws.preserved = true` and skips the `RemoveAll`, leaving the workspace under `cfg.WorkDir/<run-id>` for an operator to inspect. Successful issue runs still clean up.
+Cleanup operates on `taskRoot`, not `workDir`. When `preserveOnFailure` is true and claude exits non-zero, `ws.preserved` is set and the deferred `RemoveAll` is skipped, leaving the whole task root for an operator to inspect. `prepareWorkDir` itself runs `RemoveAll(workDir)` before cloning so a leftover `repo/` from a previous preserved-on-failure run does not block re-cloning. Resume is out of scope; the runner re-clones each time and any future `.claude-runner/` content has its own lifecycle.
 
 `Issue.PreserveOnFailure` defaults to `true` via custom `UnmarshalYAML` on both `Config` and `EventConfig` (`model.go`) — set `issue.preserveOnFailure: false` in `config.yaml` to opt out. Don't change the default in struct literals; tests construct configs directly and rely on the zero value, while YAML-loaded daemons rely on the unmarshaler.
 
-When `BaseRef` is provided, `generateDiff` writes `claude-runner.diff` into the workspace and `preparePrompt` appends a "Pull request context" trailer pointing Claude at it; issue events skip this trailer (the prompt is already authoritative).
+`git clone` is invoked with `-c core.longpaths=true` so deep `.git/objects/...` paths work on Windows even when the test name + workspace prefix push paths past `MAX_PATH` (260 chars). When `BaseRef` is provided, `generateDiff` writes `claude-runner.diff` into the workspace and `preparePrompt` appends a "Pull request context" trailer; issue events skip this trailer (the prompt is already authoritative).
 
 ### Issue protocol constants
 

@@ -81,6 +81,11 @@ type runOptions struct {
 	// preserveOnFailure: keep the cloned workspace when claude exits non-zero
 	// so an operator can inspect. Only applies when req.Repo != "".
 	preserveOnFailure bool
+	// issueTaskID, when set, switches the workspace to the stable issue
+	// layout: <WorkDir>/<issueTaskID>/repo/ for the git checkout, with the
+	// task root reserved for sibling runner metadata (e.g. .claude-runner/).
+	// Empty value keeps the per-run ULID layout used by CI / PR review.
+	issueTaskID string
 }
 
 type workspaceOutcome struct {
@@ -91,28 +96,30 @@ type workspaceOutcome struct {
 func (svc *service) runClaudeInTemporaryWorkspace(ctx context.Context, req RunRequest, opts runOptions) (*Result, workspaceOutcome, error) {
 	id := ulid.Make().String()
 
-	workDir, err := svc.prepareWorkDir(ctx, req, id)
-	if err != nil {
+	taskRoot, workDir := svc.resolveWorkspacePaths(req, opts, id)
+
+	if err := svc.prepareWorkDir(ctx, req, workDir); err != nil {
 		return nil, workspaceOutcome{}, err
 	}
 
-	ws := workspaceOutcome{dir: workDir}
+	ws := workspaceOutcome{dir: taskRoot}
 	if req.Repo != "" {
 		defer func() {
 			if ws.preserved {
 				svc.log.Info("preserving failed issue workspace",
-					zap.String("work_dir", workDir),
+					zap.String("task_root", taskRoot),
 					zap.String("id", id))
 				return
 			}
-			if err := os.RemoveAll(workDir); err != nil {
-				svc.log.Warn("remove workspace", zap.String("work_dir", workDir), zap.Error(err))
+			if err := os.RemoveAll(taskRoot); err != nil {
+				svc.log.Warn("remove workspace", zap.String("task_root", taskRoot), zap.Error(err))
 			}
 		}()
 	}
 
 	var diff string
 	if req.BaseRef != "" {
+		var err error
 		diff, err = svc.generateDiff(ctx, req, workDir)
 		if err != nil {
 			return nil, ws, err
@@ -265,14 +272,42 @@ func (svc *service) generateDiff(ctx context.Context, req RunRequest, workDir st
 	return stdout.String(), nil
 }
 
-func (svc *service) prepareWorkDir(ctx context.Context, req RunRequest, id string) (string, error) {
+// resolveWorkspacePaths returns (taskRoot, workDir) for a run.
+//   - existing-workspace mode (req.Repo == ""): both are svc.cfg.WorkDir.
+//   - issue mode (opts.issueTaskID set): <WorkDir>/<issueTaskID>/ and
+//     <WorkDir>/<issueTaskID>/repo/. The runner reserves the task root for
+//     sibling metadata (.claude-runner/), so the git checkout lives under repo/.
+//   - CI / PR review mode: per-run ULID; workDir == taskRoot.
+func (svc *service) resolveWorkspacePaths(req RunRequest, opts runOptions, runID string) (string, string) {
 	if req.Repo == "" {
-		return svc.cfg.WorkDir, nil
+		return svc.cfg.WorkDir, svc.cfg.WorkDir
+	}
+	if opts.issueTaskID != "" {
+		taskRoot := filepath.Join(svc.cfg.WorkDir, opts.issueTaskID)
+		return taskRoot, filepath.Join(taskRoot, "repo")
+	}
+	root := filepath.Join(svc.cfg.WorkDir, runID)
+	return root, root
+}
+
+func (svc *service) prepareWorkDir(ctx context.Context, req RunRequest, workDir string) error {
+	if req.Repo == "" {
+		return nil
 	}
 
-	workDir := filepath.Join(svc.cfg.WorkDir, id)
+	// Stable issue layout may already have a leftover repo/ from a previous
+	// preserved-on-failure run; git clone refuses non-empty targets.
+	if err := os.RemoveAll(workDir); err != nil {
+		return fmt.Errorf("clear stale workspace: %w", err)
+	}
+	if parent := filepath.Dir(workDir); parent != svc.cfg.WorkDir {
+		if err := os.MkdirAll(parent, 0o755); err != nil {
+			return fmt.Errorf("create workspace parent: %w", err)
+		}
+	}
 
-	args := []string{"clone"}
+	// core.longpaths lets git create paths > MAX_PATH on Windows; harmless elsewhere.
+	args := []string{"-c", "core.longpaths=true", "clone"}
 	if req.BaseRef == "" {
 		args = append(args, "--depth", "1")
 	}
@@ -283,12 +318,14 @@ func (svc *service) prepareWorkDir(ctx context.Context, req RunRequest, id strin
 	args = append(args, req.Repo, workDir)
 
 	cmd := exec.CommandContext(ctx, "git", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		if removeErr := os.RemoveAll(workDir); removeErr != nil {
 			svc.log.Warn("remove failed clone", zap.String("work_dir", workDir), zap.Error(removeErr))
 		}
-		return "", fmt.Errorf("git clone failed: %w", err)
+		return fmt.Errorf("git clone failed: %s: %w", strings.TrimSpace(stderr.String()), err)
 	}
 
-	return workDir, nil
+	return nil
 }
