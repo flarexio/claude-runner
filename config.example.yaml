@@ -12,6 +12,8 @@ maxTurns: 10
 
 # event=issue overrides; empty fields fall back to the top-level values.
 issue:
+  # bypassPermissions: true → --dangerously-skip-permissions, ignores
+  # allowedTools. Only safe behind the label gates in the README.
   bypassPermissions: false
   maxTurns: 30
   # preserveOnFailure: keep the cloned workspace when claude exits non-zero
