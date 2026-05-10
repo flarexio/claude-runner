@@ -59,19 +59,20 @@ Issue mode prompts are **always built server-side** by `buildIssuePrompt` from t
 
 ### Workspace lifecycle
 
-Both `Run` and `RunIssue` execute Claude through the shared helper `runClaudeInTemporaryWorkspace(ctx, req, opts)` (`service.go`), which resolves `(taskRoot, workDir)` via `resolveWorkspacePaths`:
+The two modes have different lifecycles, owned by separate functions in `service.go`. They share only the leaf helper `execClaude(ctx, req, workDir, runID)`, which builds the diff (when applicable), composes the prompt, runs `claude` in `workDir`, and returns the result plus a `claudeFailed` bool. `execClaude` does **not** own the workspace — the caller's lifecycle wrapper does.
 
-- **Stateless / CI / PR review** (`runStateless`, `runOptions{}`): per-run ULID, flat — `taskRoot == workDir == <cfg.WorkDir>/<ulid>`. Always cleaned up.
-- **Issue execution** (`runIssueExecution`, `runOptions{issueTaskID: gh-issue-<owner>-<repo>-<n>, preserveOnFailure: cfg.Issue.PreserveOnFailure}`): stable layout — `taskRoot = <cfg.WorkDir>/<issueTaskID>`, `workDir = <taskRoot>/repo`. The git checkout lives under `repo/` so the task root can hold sibling runner metadata (e.g. `.claude-runner/`) outside the worktree. Future state-persistence work hangs off the task root, not the checkout.
-- **Existing-workspace mode** (`req.Repo == ""`): both paths equal `cfg.WorkDir`; the helper never removes it.
+- **Stateless / CI / PR review** (`runStateless`): per-run ULID, flat — `workDir = <cfg.WorkDir>/<ulid>`. Always cleaned up. When `req.Repo == ""` (existing-workspace mode), `workDir = cfg.WorkDir` and the function never removes it.
+- **Issue execution** (`runIssueExecution`, in `service_issue.go`): stable layout — `taskRoot = <cfg.WorkDir>/<issueTaskID>` where `issueTaskID = gh-issue-<owner>-<repo>-<n>`, `workDir = <taskRoot>/repo`. Cleanup operates on `taskRoot`, not `workDir`, so the task root can hold sibling runner metadata (e.g. `.claude-runner/`) outside the worktree without surviving a successful run. Future state-persistence work in #4 hangs off the task root.
 
-Cleanup operates on `taskRoot`, not `workDir`. When `preserveOnFailure` is true and claude exits non-zero, `ws.preserved` is set and the deferred `RemoveAll` is skipped, leaving the whole task root for an operator to inspect. `prepareWorkDir` itself runs `RemoveAll(workDir)` before cloning so a leftover `repo/` from a previous preserved-on-failure run does not block re-cloning. Resume is out of scope; the runner re-clones each time and any future `.claude-runner/` content has its own lifecycle.
+When adding issue-specific behavior (state files, resume, PR finalizer), put it in `runIssueExecution` (or a deeper helper it calls). Do **not** thread it through `execClaude` — the architecture goal is to keep the CI / PR review path from accumulating issue-mode complexity (per #4).
+
+When `claude` exits non-zero in issue mode and `cfg.Issue.PreserveOnFailure` is true, `ws.preserved` is set and the deferred `RemoveAll` is skipped, leaving the whole task root for an operator to inspect. `prepareWorkDir` runs `RemoveAll(workDir)` before cloning so a leftover `repo/` from a previous preserved-on-failure run does not block re-cloning (resume itself is out of scope; this just unblocks a manual re-trigger).
 
 `Issue.PreserveOnFailure` defaults to `true` via custom `UnmarshalYAML` on both `Config` and `EventConfig` (`model.go`) — set `issue.preserveOnFailure: false` in `config.yaml` to opt out. Don't change the default in struct literals; tests construct configs directly and rely on the zero value, while YAML-loaded daemons rely on the unmarshaler.
 
 When `BaseRef` is provided, `generateDiff` writes `claude-runner.diff` into the workspace and `preparePrompt` appends a "Pull request context" trailer; issue events skip this trailer (the prompt is already authoritative).
 
-Tests use a `shortTempDir` helper (in `service_test.go`) instead of `t.TempDir()` for cloned repos, because `t.TempDir()` embeds the Go test name in the path — combined with the new `<gh-issue-...>/repo/.git/objects/...` layout, long test names can push paths past Windows `MAX_PATH` (260 chars). The runner itself never produces paths that long; the helper is purely test-infra.
+Tests use a `shortTempDir` helper (in `service_test.go`) instead of `t.TempDir()` for cloned repos, because `t.TempDir()` embeds the Go test name in the path — combined with the `<gh-issue-...>/repo/.git/objects/...` layout, long test names can push paths past Windows `MAX_PATH` (260 chars). The runner itself never produces paths that long; the helper is purely test-infra.
 
 ### Issue protocol constants
 

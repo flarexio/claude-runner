@@ -72,20 +72,26 @@ func (svc *service) Run(ctx context.Context, req RunRequest) (*Result, error) {
 	return svc.runStateless(ctx, req)
 }
 
+// runStateless owns the CI / PR review lifecycle: per-run ULID workspace,
+// always cleaned up. Issue mode lives in runIssueExecution.
 func (svc *service) runStateless(ctx context.Context, req RunRequest) (*Result, error) {
-	result, _, err := svc.runClaudeInTemporaryWorkspace(ctx, req, runOptions{})
-	return result, err
-}
+	runID := ulid.Make().String()
 
-type runOptions struct {
-	// preserveOnFailure: keep the cloned workspace when claude exits non-zero
-	// so an operator can inspect. Only applies when req.Repo != "".
-	preserveOnFailure bool
-	// issueTaskID, when set, switches the workspace to the stable issue
-	// layout: <WorkDir>/<issueTaskID>/repo/ for the git checkout, with the
-	// task root reserved for sibling runner metadata (e.g. .claude-runner/).
-	// Empty value keeps the per-run ULID layout used by CI / PR review.
-	issueTaskID string
+	workDir := svc.cfg.WorkDir
+	if req.Repo != "" {
+		workDir = filepath.Join(svc.cfg.WorkDir, runID)
+		if err := svc.prepareWorkDir(ctx, req, workDir); err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err := os.RemoveAll(workDir); err != nil {
+				svc.log.Warn("remove workspace", zap.String("work_dir", workDir), zap.Error(err))
+			}
+		}()
+	}
+
+	result, _, err := svc.execClaude(ctx, req, workDir, runID)
+	return result, err
 }
 
 type workspaceOutcome struct {
@@ -93,42 +99,22 @@ type workspaceOutcome struct {
 	preserved bool
 }
 
-func (svc *service) runClaudeInTemporaryWorkspace(ctx context.Context, req RunRequest, opts runOptions) (*Result, workspaceOutcome, error) {
-	id := ulid.Make().String()
-
-	taskRoot, workDir := svc.resolveWorkspacePaths(req, opts, id)
-
-	if err := svc.prepareWorkDir(ctx, req, workDir); err != nil {
-		return nil, workspaceOutcome{}, err
-	}
-
-	ws := workspaceOutcome{dir: taskRoot}
-	if req.Repo != "" {
-		defer func() {
-			if ws.preserved {
-				svc.log.Info("preserving failed issue workspace",
-					zap.String("task_root", taskRoot),
-					zap.String("id", id))
-				return
-			}
-			if err := os.RemoveAll(taskRoot); err != nil {
-				svc.log.Warn("remove workspace", zap.String("task_root", taskRoot), zap.Error(err))
-			}
-		}()
-	}
-
+// execClaude builds the diff (when applicable), composes the prompt, and runs
+// the claude CLI in workDir. It does not own the workspace; the caller's
+// lifecycle wrapper does. The bool return is true when claude exited non-zero.
+func (svc *service) execClaude(ctx context.Context, req RunRequest, workDir, runID string) (*Result, bool, error) {
 	var diff string
 	if req.BaseRef != "" {
 		var err error
 		diff, err = svc.generateDiff(ctx, req, workDir)
 		if err != nil {
-			return nil, ws, err
+			return nil, false, err
 		}
 	}
 
 	prompt, err := svc.preparePrompt(req, workDir, diff)
 	if err != nil {
-		return nil, ws, err
+		return nil, false, err
 	}
 
 	req.Prompt = prompt
@@ -141,23 +127,17 @@ func (svc *service) runClaudeInTemporaryWorkspace(ctx context.Context, req RunRe
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	result := &Result{ID: id}
-
-	if err := cmd.Run(); err != nil {
-		result.Output = stdout.String()
+	result := &Result{ID: runID}
+	runErr := cmd.Run()
+	result.Output = stdout.String()
+	if runErr != nil {
 		result.Error = stderr.String()
 		if result.Error == "" {
-			result.Error = err.Error()
+			result.Error = runErr.Error()
 		}
-		if opts.preserveOnFailure && req.Repo != "" {
-			ws.preserved = true
-		}
-		return result, ws, nil
+		return result, true, nil
 	}
-
-	result.Output = stdout.String()
-
-	return result, ws, nil
+	return result, false, nil
 }
 
 func (svc *service) buildArgs(req RunRequest) []string {
@@ -272,31 +252,14 @@ func (svc *service) generateDiff(ctx context.Context, req RunRequest, workDir st
 	return stdout.String(), nil
 }
 
-// resolveWorkspacePaths returns (taskRoot, workDir) for a run.
-//   - existing-workspace mode (req.Repo == ""): both are svc.cfg.WorkDir.
-//   - issue mode (opts.issueTaskID set): <WorkDir>/<issueTaskID>/ and
-//     <WorkDir>/<issueTaskID>/repo/. The runner reserves the task root for
-//     sibling metadata (.claude-runner/), so the git checkout lives under repo/.
-//   - CI / PR review mode: per-run ULID; workDir == taskRoot.
-func (svc *service) resolveWorkspacePaths(req RunRequest, opts runOptions, runID string) (string, string) {
-	if req.Repo == "" {
-		return svc.cfg.WorkDir, svc.cfg.WorkDir
-	}
-	if opts.issueTaskID != "" {
-		taskRoot := filepath.Join(svc.cfg.WorkDir, opts.issueTaskID)
-		return taskRoot, filepath.Join(taskRoot, "repo")
-	}
-	root := filepath.Join(svc.cfg.WorkDir, runID)
-	return root, root
-}
-
 func (svc *service) prepareWorkDir(ctx context.Context, req RunRequest, workDir string) error {
 	if req.Repo == "" {
 		return nil
 	}
 
-	// Stable issue layout may already have a leftover repo/ from a previous
-	// preserved-on-failure run; git clone refuses non-empty targets.
+	// A leftover repo/ from a previous preserved-on-failure issue run would
+	// make git clone refuse the destination; stateless runs use unique ULIDs
+	// so this is a no-op for them.
 	if err := os.RemoveAll(workDir); err != nil {
 		return fmt.Errorf("clear stale workspace: %w", err)
 	}

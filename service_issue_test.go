@@ -566,45 +566,6 @@ func TestRunIssueTaskIDIsStableAcrossRetries(t *testing.T) {
 	}
 }
 
-func TestResolveWorkspacePaths(t *testing.T) {
-	svc := &service{cfg: Config{WorkDir: "/ws"}}
-
-	t.Run("issue mode uses stable taskRoot/repo", func(t *testing.T) {
-		root, work := svc.resolveWorkspacePaths(
-			RunRequest{Repo: "git@github.com:o/r.git", Event: EventIssue},
-			runOptions{issueTaskID: "gh-issue-o-r-42"},
-			"01ABC",
-		)
-		if want := filepath.Join("/ws", "gh-issue-o-r-42"); root != want {
-			t.Fatalf("taskRoot = %q, want %q", root, want)
-		}
-		if want := filepath.Join("/ws", "gh-issue-o-r-42", "repo"); work != want {
-			t.Fatalf("workDir = %q, want %q", work, want)
-		}
-	})
-
-	t.Run("CI / PR review mode keeps ULID flat layout", func(t *testing.T) {
-		root, work := svc.resolveWorkspacePaths(
-			RunRequest{Repo: "git@github.com:o/r.git"},
-			runOptions{},
-			"01ABC",
-		)
-		if want := filepath.Join("/ws", "01ABC"); root != want {
-			t.Fatalf("taskRoot = %q, want %q", root, want)
-		}
-		if root != work {
-			t.Fatalf("CI mode should not introduce a repo/ subdir: workDir=%q taskRoot=%q", work, root)
-		}
-	})
-
-	t.Run("existing-workspace mode reuses cfg.WorkDir", func(t *testing.T) {
-		root, work := svc.resolveWorkspacePaths(RunRequest{}, runOptions{}, "01ABC")
-		if root != "/ws" || work != "/ws" {
-			t.Fatalf("existing-workspace mode = (%q,%q), want both /ws", root, work)
-		}
-	})
-}
-
 func TestRunPromptDoesNotTouchGitHub(t *testing.T) {
 	workspaces := t.TempDir()
 	gh := &fakeGitHub{}
