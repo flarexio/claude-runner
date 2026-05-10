@@ -8,31 +8,16 @@ allowedTools:
 
 maxTurns: 10
 
-# Optional. Passed to claude as --model. Accepts a model id
-# (e.g. claude-sonnet-4-6, claude-opus-4-7) or an alias (sonnet, opus,
-# haiku). Omit to let claude pick its default.
 # model: claude-sonnet-4-6
 
-# event=issue overrides. Empty fields fall back to the top-level values.
-# Issue mode needs Edit/Write to actually implement tasks, and usually
-# benefits from more turns than CI-style review.
-#
-# bypassPermissions: true passes --dangerously-skip-permissions to claude
-# (no per-tool prompts, ignores allowedTools). Only safe behind the label
-# + author_association gates documented in the README.
+# event=issue overrides; empty fields fall back to the top-level values.
 issue:
   bypassPermissions: false
   maxTurns: 30
-  # preserveOnFailure keeps the cloned workspace under workDir when the
-  # claude run exits non-zero, so an operator can inspect the failed run
-  # before retriggering. Successful issue runs still clean up. CI / PR
-  # review cleanup is unaffected. Defaults to true when omitted; set to
-  # false to opt out and clean up failed issue workspaces too.
+  # preserveOnFailure: keep the cloned workspace when claude exits non-zero
+  # for operator inspection. Defaults to true.
   preserveOnFailure: true
   # model: claude-opus-4-7
-  # modelLabels maps optional issue labels to Claude model ids or aliases.
-  # If an issue has no model label, or its label is not mapped here, issue.model
-  # falls back to the top-level model.
   # modelLabels:
   #   model:fast: claude-haiku-4-5
   #   model:balanced: claude-sonnet-4-6
@@ -46,5 +31,5 @@ issue:
   # - Bash
 
 # github:
-#   token: ghp_xxx        # required for event=issue; falls back to $GITHUB_TOKEN
+#   token: ghp_xxx        # falls back to $GITHUB_TOKEN
 #   baseURL: https://api.github.com

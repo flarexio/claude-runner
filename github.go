@@ -14,8 +14,7 @@ import (
 
 const defaultGitHubBaseURL = "https://api.github.com"
 
-// GitHubClient is the minimal API surface that runner needs to operate on
-// GitHub issues. It is an interface so tests can supply fakes.
+// GitHubClient is the minimal GitHub API surface used by the runner.
 type GitHubClient interface {
 	GetIssue(ctx context.Context, repo string, number int) (*Issue, error)
 	AddLabels(ctx context.Context, repo string, number int, labels []string) error
@@ -55,7 +54,6 @@ type httpGitHubClient struct {
 	http    *http.Client
 }
 
-// NewGitHubClient returns an HTTP-backed GitHubClient.
 func NewGitHubClient(cfg GitHubConfig) GitHubClient {
 	base := cfg.BaseURL
 	if base == "" {

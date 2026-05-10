@@ -50,16 +50,13 @@ type service struct {
 	bgWg sync.WaitGroup
 }
 
-// Close blocks until any background work (e.g. async issue execution) has
-// finished. Close does not cancel in-flight work; the goroutines run on a
-// fresh context independent of any caller's request lifetime.
+// Close blocks until in-flight background work finishes. It does not cancel;
+// background goroutines run on a fresh context independent of any request.
 func (svc *service) Close() error {
 	svc.bgWg.Wait()
 	return nil
 }
 
-// launchBg runs fn in a tracked goroutine with a fresh context so its
-// lifetime is decoupled from the caller's request context.
 func (svc *service) launchBg(fn func(context.Context)) {
 	svc.bgWg.Add(1)
 	go func() {
@@ -68,8 +65,6 @@ func (svc *service) launchBg(fn func(context.Context)) {
 	}()
 }
 
-// Run handles prompt-only and pull-request review jobs synchronously.
-// Issue jobs go through RunIssue.
 func (svc *service) Run(ctx context.Context, req RunRequest) (*Result, error) {
 	if req.Prompt == "" {
 		return nil, ErrInvalidPrompt
@@ -77,42 +72,22 @@ func (svc *service) Run(ctx context.Context, req RunRequest) (*Result, error) {
 	return svc.runStateless(ctx, req)
 }
 
-// runStateless is the high-level lifecycle for prompt-only and CI / PR review
-// jobs. It intentionally stays synchronous and uses a throwaway workspace when
-// a repository is supplied.
 func (svc *service) runStateless(ctx context.Context, req RunRequest) (*Result, error) {
 	result, _, err := svc.runClaudeInTemporaryWorkspace(ctx, req, runOptions{})
 	return result, err
 }
 
-// runOptions tunes the workspace lifecycle of runClaudeInTemporaryWorkspace.
-// The zero value matches the original behavior used by stateless / CI / PR
-// review runs (always remove the temporary workspace).
 type runOptions struct {
-	// preserveOnFailure keeps the cloned workspace intact when claude
-	// exits non-zero, so an operator can inspect the failed run. It only
-	// applies to repo-backed runs (req.Repo != ""); the existing-workspace
-	// path never owns its directory and is unaffected.
+	// preserveOnFailure: keep the cloned workspace when claude exits non-zero
+	// so an operator can inspect. Only applies when req.Repo != "".
 	preserveOnFailure bool
 }
 
-// workspaceOutcome reports what happened to the temporary workspace when
-// runClaudeInTemporaryWorkspace returned. It is only meaningful for
-// repo-backed runs; for existing-workspace runs the workspace is the
-// configured WorkDir and is never owned by the helper.
 type workspaceOutcome struct {
 	dir       string
 	preserved bool
 }
 
-// runClaudeInTemporaryWorkspace clones (when needed), generates a diff (when
-// applicable), composes the final prompt, and runs claude. It is a lower-level
-// execution helper shared by the stateless path and the issue workflow's
-// background execution step.
-//
-// The returned workspaceOutcome describes whether the cloned workspace was
-// preserved on the runner. Callers can use it for richer logging or failure
-// reporting; the helper itself owns the actual filesystem cleanup.
 func (svc *service) runClaudeInTemporaryWorkspace(ctx context.Context, req RunRequest, opts runOptions) (*Result, workspaceOutcome, error) {
 	id := ulid.Make().String()
 
@@ -201,9 +176,8 @@ func (svc *service) buildArgs(req RunRequest) []string {
 	return args
 }
 
-// eventConfig resolves the effective Claude flags for an event. Issue events
-// read from cfg.Issue first and fall through to the top-level values; other
-// events always use the top-level values.
+// eventConfig resolves Claude flags for an event. Issue events fall through
+// cfg.Issue → top-level; other events use the top-level values directly.
 func (svc *service) eventConfig(event string) EventConfig {
 	if event != EventIssue {
 		return EventConfig{
@@ -227,7 +201,7 @@ func (svc *service) eventConfig(event string) EventConfig {
 }
 
 func (svc *service) preparePrompt(req RunRequest, workDir string, diff string) (string, error) {
-	// Issue events build their prompt before reaching execute; no PR trailer.
+	// Issue prompts are built upstream by buildIssuePrompt; skip the PR trailer.
 	if req.Event == EventIssue {
 		return req.Prompt, nil
 	}

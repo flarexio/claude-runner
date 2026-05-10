@@ -16,8 +16,6 @@ func AddRouters(r *gin.Engine, endpoints runner.EndpointSet) {
 	api.POST("/run-issue", endpointHandler[runner.RunIssueRequest](endpoints.RunIssue))
 }
 
-// endpointHandler binds the JSON body to T, then dispatches to ep. Each
-// endpoint has its own request type; nothing is shared at this layer.
 func endpointHandler[T any](ep endpoint.Endpoint) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req T

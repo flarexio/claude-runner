@@ -69,9 +69,8 @@ type Config struct {
 	GitHub       GitHubConfig `yaml:"github,omitempty"`
 }
 
-// UnmarshalYAML applies config-level defaults while preserving every decoded
-// top-level attribute. In particular, issue.preserveOnFailure defaults to true
-// even when the entire issue block is omitted.
+// UnmarshalYAML defaults issue.preserveOnFailure to true even when the issue
+// block is omitted entirely.
 func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 	type rawConfig Config
 	raw := rawConfig{Issue: EventConfig{PreserveOnFailure: true}}
@@ -82,19 +81,14 @@ func (c *Config) UnmarshalYAML(value *yaml.Node) error {
 	return nil
 }
 
-// EventConfig overrides the top-level Claude flags for a specific event.
-// Empty fields fall back to the top-level Config values.
+// EventConfig overrides top-level Claude flags for an event. Empty fields fall
+// back to the top-level Config values.
 //
-// BypassPermissions, when true, passes --dangerously-skip-permissions to
-// claude and ignores AllowedTools. Use only for trusted unattended flows
-// (issue mode behind label + author gates) where no human is watching tool
-// calls.
+// BypassPermissions passes --dangerously-skip-permissions and ignores
+// AllowedTools — only for trusted unattended flows.
 //
-// PreserveOnFailure (issue mode only) keeps the cloned workspace under
-// WorkDir when claude exits non-zero, so an operator can inspect the run
-// before re-triggering. Successful runs still clean up. CI / PR review
-// runs ignore this flag and always clean up. YAML decoding defaults the
-// field to true, while an explicit preserveOnFailure: false opts out.
+// PreserveOnFailure (issue mode) keeps the cloned workspace when claude exits
+// non-zero. Defaults to true via UnmarshalYAML.
 type EventConfig struct {
 	AllowedTools      []string          `yaml:"allowedTools,omitempty"`
 	MaxTurns          int               `yaml:"maxTurns,omitempty"`
@@ -104,10 +98,6 @@ type EventConfig struct {
 	PreserveOnFailure bool              `yaml:"preserveOnFailure,omitempty"`
 }
 
-// UnmarshalYAML applies the issue-mode default of preserveOnFailure: true
-// while preserving every other EventConfig field decoded from YAML. The
-// project uses gopkg.in/yaml.v3, whose custom unmarshaler receives a
-// *yaml.Node rather than the v2-style unmarshal callback.
 func (c *EventConfig) UnmarshalYAML(value *yaml.Node) error {
 	type rawEventConfig EventConfig
 	raw := rawEventConfig{PreserveOnFailure: true}

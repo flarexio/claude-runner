@@ -5,13 +5,7 @@ import (
 	"strings"
 )
 
-// NormalizeRepo extracts the canonical "owner/repo" slug from common repo
-// reference forms:
-//   - owner/repo
-//   - https://github.com/owner/repo
-//   - https://github.com/owner/repo.git
-//   - git@github.com:owner/repo.git
-//   - ssh://git@github.com/owner/repo.git
+// NormalizeRepo extracts the "owner/repo" slug from a URL, SSH, or slug form.
 func NormalizeRepo(repo string) (string, error) {
 	repo = strings.TrimSpace(repo)
 	if repo == "" {

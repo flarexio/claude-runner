@@ -10,22 +10,13 @@ import (
 	"go.uber.org/zap"
 )
 
-// RunIssue handles a GitHub issue task. It performs validation and the
-// claim protocol synchronously (so the caller learns immediately if the
-// request is malformed or the issue cannot be claimed), then kicks off
-// Claude execution in a tracked background goroutine and returns an
-// "accepted" Result. Final success/failure is reported as a comment on
-// the issue itself.
-//
-// Use Service.Close to wait for in-flight background work — required for
-// one-shot CLI invocations and graceful daemon shutdown.
+// RunIssue validates and claims an issue synchronously, then runs Claude in
+// the background. Final success/failure is posted as a comment on the issue.
+// Callers must Service.Close to wait for the background goroutine to finish.
 func (svc *service) RunIssue(ctx context.Context, req RunIssueRequest) (*Result, error) {
 	return svc.runIssueWorkflow(ctx, req)
 }
 
-// runIssueWorkflow is the high-level lifecycle for stateful issue tasks. It
-// owns issue validation and claim behavior before launching the lower-level
-// Claude execution step in the background.
 func (svc *service) runIssueWorkflow(ctx context.Context, req RunIssueRequest) (*Result, error) {
 	if svc.github == nil {
 		return nil, ErrGitHubUnavailable
@@ -54,9 +45,8 @@ func (svc *service) runIssueWorkflow(ctx context.Context, req RunIssueRequest) (
 
 	runID := ulid.Make().String()
 
-	// Translate to the internal RunRequest that execute consumes. Event is
-	// set so claudeArgs picks up the issue-specific overrides and so
-	// preparePrompt skips the PR trailer.
+	// Event=EventIssue routes buildArgs to the issue overrides and tells
+	// preparePrompt to skip the PR trailer.
 	exec := RunRequest{
 		Prompt: buildIssuePrompt(slug, issue),
 		Repo:   req.Repo,
@@ -188,20 +178,10 @@ func (svc *service) reportIssueSuccess(ctx context.Context, repo string, number 
 	}
 }
 
-// issueFailureReport carries the context reportIssueFailure needs to write
-// an actionable, sanitized failure comment.
 type issueFailureReport struct {
-	// runID is the workflow-level run id used in server logs. Including
-	// it in the comment lets an operator correlate the failure with the
-	// runner's logs without exposing host paths.
-	runID string
-	// detail is the raw error / stderr from claude. It is sanitized
-	// before being posted.
-	detail string
-	// ws describes the cloned workspace; ws.preserved is mentioned in
-	// the comment when true so reporters know an inspectable copy lives
-	// on the runner. The path itself is never posted publicly.
-	ws workspaceOutcome
+	runID  string // included in the comment for log correlation
+	detail string // raw stderr; sanitized before posting
+	ws     workspaceOutcome
 }
 
 func (svc *service) reportIssueFailure(ctx context.Context, repo string, number int, report issueFailureReport) {
@@ -232,10 +212,8 @@ func buildIssueFailureComment(report issueFailureReport, workRoot string) string
 	return b.String()
 }
 
-// sanitizeFailureDetail strips host-local details we don't want to expose
-// when posting failure comments on public issues. It is best-effort
-// redaction (not a security boundary) and intentionally narrow: the
-// workspace clone path and the runner's home directory.
+// sanitizeFailureDetail is best-effort redaction (not a security boundary):
+// strip workspace paths and the runner's home dir before posting publicly.
 func sanitizeFailureDetail(s, workRoot, workDir string) string {
 	if workDir != "" {
 		s = strings.ReplaceAll(s, workDir, "<workspace>")

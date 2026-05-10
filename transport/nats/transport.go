@@ -8,7 +8,6 @@ import (
 	"github.com/nats-io/nats.go/micro"
 )
 
-// EndpointHandler decodes the NATS payload into T, then dispatches to ep.
 func EndpointHandler[T any](ep endpoint.Endpoint) micro.HandlerFunc {
 	return func(r micro.Request) {
 		var req T

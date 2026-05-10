@@ -91,8 +91,6 @@ func main() {
 	}
 }
 
-// loadConfig reads config.yaml from the resolved config dir, applies defaults,
-// and overrides cfg.GitHub.Token with $GITHUB_TOKEN when set.
 func loadConfig(cmd *cli.Command) (runner.Config, string, error) {
 	path := cmd.String("path")
 	if path == "" {
@@ -236,16 +234,12 @@ func runIssue(ctx context.Context, cmd *cli.Command) error {
 
 	result, err := svc.RunIssue(ctx, req)
 	if err != nil {
-		// Close still drains in case anything got launched, but for an error
-		// before launchBg the WaitGroup should be empty.
 		_ = svc.Close()
 		return err
 	}
 
 	logger.Info("issue accepted; waiting for background completion", zap.String("id", result.ID))
 
-	// Block until the background goroutine kicked off by RunIssue finishes.
-	// Final outcome is posted as a comment on the issue itself.
 	if err := svc.Close(); err != nil {
 		return err
 	}
