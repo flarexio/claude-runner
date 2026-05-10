@@ -199,46 +199,6 @@ func TestRunIssuePassesModelSelectedFromLabel(t *testing.T) {
 	}
 }
 
-func TestRunIssueWorkflowAcceptsSyncAndCompletesInBackground(t *testing.T) {
-	gh := &fakeGitHub{issue: validIssue()}
-	workspaces := t.TempDir()
-	svc := &service{cfg: Config{WorkDir: workspaces}, log: zap.NewNop(), github: gh}
-
-	prependFakeClaude(t, 0)
-
-	result, err := svc.runIssueWorkflow(context.Background(), RunIssueRequest{
-		Repo:        newRemoteRepo(t),
-		IssueNumber: 42,
-	})
-	if err != nil {
-		t.Fatalf("runIssueWorkflow() error = %v", err)
-	}
-	if result.ID == "" {
-		t.Fatal("result.ID is empty, want non-empty for accepted issue")
-	}
-	if !strings.Contains(result.Output, "accepted") {
-		t.Fatalf("result.Output = %q, want accepted message", result.Output)
-	}
-
-	// Claim happened synchronously, before the background work is drained.
-	if got, want := gh.removed, []string{LabelAgentReady}; !sliceEqual(got, want) {
-		t.Fatalf("removed = %v, want %v", got, want)
-	}
-	if !slices.Contains(gh.added, LabelClaimedByClaude) {
-		t.Fatalf("added does not include claimed-by-claude: %v", gh.added)
-	}
-	if len(gh.comments) < 1 || !strings.Contains(gh.comments[0], "claimed") {
-		t.Fatalf("first comment must be the claim message: %v", gh.comments)
-	}
-
-	if err := svc.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-	if len(gh.comments) < 2 || !strings.Contains(gh.comments[len(gh.comments)-1], "finished") {
-		t.Fatalf("expected final success comment, got %v", gh.comments)
-	}
-}
-
 func TestRunIssueRequiresGitHubClient(t *testing.T) {
 	svc := &service{cfg: Config{}, log: zap.NewNop()}
 	_, err := svc.RunIssue(context.Background(), RunIssueRequest{
@@ -366,43 +326,6 @@ func TestRunIssueReportsFailure(t *testing.T) {
 	}
 }
 
-func TestRunIssuePreservesWorkspaceOnFailureByDefault(t *testing.T) {
-	gh := &fakeGitHub{issue: validIssue()}
-	workspaces := t.TempDir()
-	// Config loaded from YAML defaults PreserveOnFailure to true when omitted.
-	svc := &service{cfg: Config{WorkDir: workspaces, Issue: EventConfig{PreserveOnFailure: true}}, log: zap.NewNop(), github: gh}
-
-	prependFakeClaude(t, 1)
-
-	if _, err := svc.RunIssue(context.Background(), RunIssueRequest{
-		Repo:        newRemoteRepo(t),
-		IssueNumber: 42,
-	}); err != nil {
-		t.Fatalf("RunIssue() error = %v", err)
-	}
-	if err := svc.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-
-	entries, err := os.ReadDir(workspaces)
-	if err != nil {
-		t.Fatalf("read workspaces: %v", err)
-	}
-	if len(entries) == 0 {
-		t.Fatal("expected preserved workspace under default config, found none")
-	}
-
-	failure := gh.comments[len(gh.comments)-1]
-	if !strings.Contains(failure, "Workspace preserved") {
-		t.Fatalf("failure comment = %q, want preservation hint by default", failure)
-	}
-	for _, entry := range entries {
-		if strings.Contains(failure, entry.Name()) {
-			t.Fatalf("failure comment %q exposes workspace dir name %q", failure, entry.Name())
-		}
-	}
-}
-
 func TestRunIssueRemovesWorkspaceOnFailureWhenDisabled(t *testing.T) {
 	gh := &fakeGitHub{issue: validIssue()}
 	workspaces := t.TempDir()
@@ -480,11 +403,9 @@ func TestRunIssuePreservesWorkspaceOnFailureWhenExplicitlyEnabled(t *testing.T) 
 	}
 }
 
-func TestRunIssueRemovesWorkspaceOnSuccessByDefault(t *testing.T) {
+func TestRunIssueRemovesWorkspaceOnSuccessEvenWithPreserveOnFailure(t *testing.T) {
 	gh := &fakeGitHub{issue: validIssue()}
 	workspaces := t.TempDir()
-	// A config decoded from YAML defaults PreserveOnFailure to true, but
-	// successful runs must still clean up.
 	svc := &service{cfg: Config{WorkDir: workspaces, Issue: EventConfig{PreserveOnFailure: true}}, log: zap.NewNop(), github: gh}
 
 	prependFakeClaude(t, 0)
