@@ -130,10 +130,10 @@ func (svc *service) runIssueExecution(ctx context.Context, req RunRequest, slug 
 }
 
 // issueTaskID returns the stable workspace key for an issue task.
-// slug must be the normalized "owner/repo" form.
+// slug should be the normalized "owner/repo" form; "/" is replaced with "-"
+// without splitting, so a malformed slug yields a usable name instead of panicking.
 func issueTaskID(slug string, number int) string {
-	parts := strings.SplitN(slug, "/", 2)
-	return fmt.Sprintf("gh-issue-%s-%s-%d", parts[0], parts[1], number)
+	return fmt.Sprintf("gh-issue-%s-%d", strings.ReplaceAll(slug, "/", "-"), number)
 }
 
 func validateIssue(issue *Issue) error {
