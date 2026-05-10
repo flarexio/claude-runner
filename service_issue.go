@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 	"go.uber.org/zap"
@@ -65,7 +66,12 @@ func (svc *service) runIssueWorkflow(ctx context.Context, req RunIssueRequest) (
 			zap.String("model", selectedModel),
 		)
 
-		result, ws, runErr := svc.runIssueExecution(bgCtx, exec, slug, req.IssueNumber)
+		result, ws, runErr := svc.runIssueExecution(bgCtx, exec, issueAttempt{
+			slug:        slug,
+			issueNumber: req.IssueNumber,
+			modelLabel:  modelLabel,
+			attemptID:   runID,
+		})
 		if runErr != nil {
 			log.Error("issue execution failed", zap.Error(runErr))
 			svc.reportIssueFailure(bgCtx, slug, req.IssueNumber, issueFailureReport{
@@ -94,24 +100,75 @@ func (svc *service) runIssueWorkflow(ctx context.Context, req RunIssueRequest) (
 	}, nil
 }
 
-// runIssueExecution owns the issue lifecycle: stable taskRoot/repo layout,
-// preserve-on-failure when configured, and a clean removal otherwise. The
-// task root is reserved for sibling runner metadata (.claude-runner/, future).
-func (svc *service) runIssueExecution(ctx context.Context, req RunRequest, slug string, issueNumber int) (*Result, workspaceOutcome, error) {
-	runID := ulid.Make().String()
-	taskRoot := filepath.Join(svc.cfg.WorkDir, issueTaskID(slug, issueNumber))
-	workDir := filepath.Join(taskRoot, "repo")
+type issueAttempt struct {
+	slug        string
+	issueNumber int
+	modelLabel  string
+	attemptID   string
+}
 
-	if err := svc.prepareWorkDir(ctx, req, workDir); err != nil {
+func (svc *service) runIssueExecution(ctx context.Context, req RunRequest, attempt issueAttempt) (*Result, workspaceOutcome, error) {
+	taskID := issueTaskID(attempt.slug, attempt.issueNumber)
+	taskRoot := filepath.Join(svc.cfg.WorkDir, taskID)
+	workDir := filepath.Join(taskRoot, "repo")
+	stateDir := filepath.Join(taskRoot, stateDirName)
+
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		return nil, workspaceOutcome{}, fmt.Errorf("create state dir: %w", err)
+	}
+
+	if err := acquireWorkspaceLock(stateDir, attempt.attemptID, svc.log); err != nil {
 		return nil, workspaceOutcome{}, err
+	}
+
+	startedAt := time.Now().UTC()
+	rec := attemptRecord{
+		AttemptID:   attempt.attemptID,
+		TaskID:      taskID,
+		Repo:        attempt.slug,
+		IssueNumber: attempt.issueNumber,
+		StartedAt:   startedAt,
+		Status:      statusRunning,
+		Branch:      req.Ref,
+		Model:       req.Model,
+		ModelLabel:  attempt.modelLabel,
+	}
+	state := taskState{
+		TaskID:        taskID,
+		Repo:          attempt.slug,
+		IssueNumber:   attempt.issueNumber,
+		LastAttemptID: attempt.attemptID,
+		LastStatus:    statusRunning,
+		UpdatedAt:     startedAt,
+	}
+	if err := writeAttempt(stateDir, &rec); err != nil {
+		releaseWorkspaceLock(stateDir, svc.log)
+		return nil, workspaceOutcome{}, fmt.Errorf("write attempt: %w", err)
+	}
+	if err := writeTaskState(stateDir, &state); err != nil {
+		releaseWorkspaceLock(stateDir, svc.log)
+		return nil, workspaceOutcome{}, fmt.Errorf("write state: %w", err)
 	}
 
 	ws := workspaceOutcome{dir: taskRoot}
 	defer func() {
+		rec.EndedAt = time.Now().UTC()
+		state.UpdatedAt = rec.EndedAt
+		state.LastStatus = rec.Status
+		state.LastErrorType = rec.ErrorType
+		state.LastCommit = rec.Commit
+		if err := writeAttempt(stateDir, &rec); err != nil {
+			svc.log.Warn("write final attempt", zap.Error(err))
+		}
+		if err := writeTaskState(stateDir, &state); err != nil {
+			svc.log.Warn("write final state", zap.Error(err))
+		}
+		releaseWorkspaceLock(stateDir, svc.log)
+
 		if ws.preserved {
 			svc.log.Info("preserving failed issue workspace",
 				zap.String("task_root", taskRoot),
-				zap.String("id", runID))
+				zap.String("id", attempt.attemptID))
 			return
 		}
 		if err := os.RemoveAll(taskRoot); err != nil {
@@ -119,13 +176,33 @@ func (svc *service) runIssueExecution(ctx context.Context, req RunRequest, slug 
 		}
 	}()
 
-	result, claudeFailed, err := svc.execClaude(ctx, req, workDir, runID)
-	if err != nil {
+	if err := svc.prepareWorkDir(ctx, req, workDir); err != nil {
+		rec.Status = statusFailed
+		rec.ErrorType = errorTypeCloneFailed
+		rec.ErrorDetail = err.Error()
 		return nil, ws, err
 	}
-	if claudeFailed && svc.cfg.Issue.PreserveOnFailure {
-		ws.preserved = true
+
+	result, claudeFailed, err := svc.execClaude(ctx, req, workDir, attempt.attemptID)
+	rec.Commit = gitHeadCommit(ctx, workDir)
+	if err != nil {
+		rec.Status = statusFailed
+		rec.ErrorType = errorTypeExecError
+		rec.ErrorDetail = err.Error()
+		return nil, ws, err
 	}
+	if claudeFailed {
+		rec.Status = statusFailed
+		rec.ErrorType = errorTypeClaudeFailed
+		if result != nil {
+			rec.ErrorDetail = result.Error
+		}
+		if svc.cfg.Issue.PreserveOnFailure {
+			ws.preserved = true
+		}
+		return result, ws, nil
+	}
+	rec.Status = statusCompleted
 	return result, ws, nil
 }
 

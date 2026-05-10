@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -521,6 +523,199 @@ func TestRunIssueWritesStableLayout(t *testing.T) {
 	// .claude-runner/ must not live inside the git worktree.
 	if _, err := os.Stat(filepath.Join(repoDir, ".claude-runner")); !os.IsNotExist(err) {
 		t.Fatalf(".claude-runner/ unexpectedly under repo/: stat err=%v", err)
+	}
+	// .claude-runner/ lives at the task root.
+	if info, err := os.Stat(filepath.Join(taskRoot, ".claude-runner")); err != nil || !info.IsDir() {
+		t.Fatalf(".claude-runner/ missing at task root: stat err=%v info=%v", err, info)
+	}
+}
+
+func TestRunIssueWritesAttemptAndState(t *testing.T) {
+	gh := &fakeGitHub{issue: validIssue()}
+	workspaces := t.TempDir()
+	svc := &service{
+		cfg: Config{
+			WorkDir: workspaces,
+			Issue:   EventConfig{PreserveOnFailure: true},
+		},
+		log:    zap.NewNop(),
+		github: gh,
+	}
+
+	prependFakeClaude(t, 1)
+
+	repo := newRemoteRepo(t)
+	result, err := svc.RunIssue(context.Background(), RunIssueRequest{
+		Repo:        repo,
+		IssueNumber: 42,
+	})
+	if err != nil {
+		t.Fatalf("RunIssue() error = %v", err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	slug, err := NormalizeRepo(repo)
+	if err != nil {
+		t.Fatalf("NormalizeRepo: %v", err)
+	}
+	stateDir := filepath.Join(workspaces, issueTaskID(slug, 42), ".claude-runner")
+
+	stateBody, err := os.ReadFile(filepath.Join(stateDir, "state.json"))
+	if err != nil {
+		t.Fatalf("read state.json: %v", err)
+	}
+	var state taskState
+	if err := json.Unmarshal(stateBody, &state); err != nil {
+		t.Fatalf("unmarshal state.json: %v", err)
+	}
+	if state.TaskID != issueTaskID(slug, 42) {
+		t.Fatalf("state.task_id = %q, want %q", state.TaskID, issueTaskID(slug, 42))
+	}
+	if state.IssueNumber != 42 {
+		t.Fatalf("state.issue_number = %d, want 42", state.IssueNumber)
+	}
+	if state.LastAttemptID != result.ID {
+		t.Fatalf("state.last_attempt_id = %q, want %q (matches workflow Run ID)", state.LastAttemptID, result.ID)
+	}
+	if state.LastStatus != statusFailed {
+		t.Fatalf("state.last_status = %q, want %q", state.LastStatus, statusFailed)
+	}
+	if state.LastErrorType != errorTypeClaudeFailed {
+		t.Fatalf("state.last_error_type = %q, want %q", state.LastErrorType, errorTypeClaudeFailed)
+	}
+
+	attemptBody, err := os.ReadFile(filepath.Join(stateDir, "attempts", result.ID+".json"))
+	if err != nil {
+		t.Fatalf("read attempt file: %v", err)
+	}
+	var attempt attemptRecord
+	if err := json.Unmarshal(attemptBody, &attempt); err != nil {
+		t.Fatalf("unmarshal attempt: %v", err)
+	}
+	if attempt.AttemptID != result.ID {
+		t.Fatalf("attempt.attempt_id = %q, want %q", attempt.AttemptID, result.ID)
+	}
+	if attempt.Status != statusFailed {
+		t.Fatalf("attempt.status = %q, want %q", attempt.Status, statusFailed)
+	}
+	if attempt.ErrorType != errorTypeClaudeFailed {
+		t.Fatalf("attempt.error_type = %q, want %q", attempt.ErrorType, errorTypeClaudeFailed)
+	}
+	if attempt.ErrorDetail == "" {
+		t.Fatal("attempt.error_detail empty, want claude stderr")
+	}
+	if attempt.StartedAt.IsZero() || attempt.EndedAt.IsZero() {
+		t.Fatalf("attempt timestamps not set: started=%v ended=%v", attempt.StartedAt, attempt.EndedAt)
+	}
+
+	if _, err := os.Stat(filepath.Join(stateDir, "lock.json")); !os.IsNotExist(err) {
+		t.Fatalf("lock.json still present after run, stat err = %v", err)
+	}
+}
+
+func TestRunIssueLockBlocksConcurrentAttempt(t *testing.T) {
+	gh := &fakeGitHub{issue: validIssue()}
+	workspaces := t.TempDir()
+	svc := &service{
+		cfg: Config{
+			WorkDir: workspaces,
+			Issue:   EventConfig{PreserveOnFailure: true},
+		},
+		log:    zap.NewNop(),
+		github: gh,
+	}
+
+	prependFakeClaude(t, 0)
+
+	repo := newRemoteRepo(t)
+	slug, _ := NormalizeRepo(repo)
+	stateDir := filepath.Join(workspaces, issueTaskID(slug, 42), ".claude-runner")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir stateDir: %v", err)
+	}
+	freshLock := workspaceLock{
+		AttemptID: "01OTHER",
+		PID:       999999,
+		StartedAt: time.Now().UTC(),
+	}
+	body, _ := json.MarshalIndent(freshLock, "", "  ")
+	if err := os.WriteFile(filepath.Join(stateDir, "lock.json"), body, 0o600); err != nil {
+		t.Fatalf("seed lock: %v", err)
+	}
+
+	if _, err := svc.RunIssue(context.Background(), RunIssueRequest{
+		Repo:        repo,
+		IssueNumber: 42,
+	}); err != nil {
+		t.Fatalf("RunIssue() sync error = %v", err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if !slices.Contains(gh.added, LabelAgentFailed) {
+		t.Fatalf("added = %v, want agent-failed", gh.added)
+	}
+	if got := gh.comments[len(gh.comments)-1]; !strings.Contains(got, "already locked") {
+		t.Fatalf("failure comment = %q, want lock contention mention", got)
+	}
+
+	// The pre-existing lock must not be overwritten.
+	got, err := readWorkspaceLock(filepath.Join(stateDir, "lock.json"))
+	if err != nil {
+		t.Fatalf("read lock: %v", err)
+	}
+	if got.AttemptID != "01OTHER" {
+		t.Fatalf("lock attempt_id = %q, want preserved 01OTHER", got.AttemptID)
+	}
+}
+
+func TestRunIssueLockTakesOverStaleLock(t *testing.T) {
+	gh := &fakeGitHub{issue: validIssue()}
+	workspaces := t.TempDir()
+	svc := &service{
+		cfg: Config{
+			WorkDir: workspaces,
+			Issue:   EventConfig{PreserveOnFailure: true},
+		},
+		log:    zap.NewNop(),
+		github: gh,
+	}
+
+	prependFakeClaude(t, 1)
+
+	repo := newRemoteRepo(t)
+	slug, _ := NormalizeRepo(repo)
+	stateDir := filepath.Join(workspaces, issueTaskID(slug, 42), ".claude-runner")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir stateDir: %v", err)
+	}
+	staleLock := workspaceLock{
+		AttemptID: "01STALE",
+		PID:       999999,
+		StartedAt: time.Now().UTC().Add(-2 * staleLockTTL),
+	}
+	body, _ := json.MarshalIndent(staleLock, "", "  ")
+	if err := os.WriteFile(filepath.Join(stateDir, "lock.json"), body, 0o600); err != nil {
+		t.Fatalf("seed stale lock: %v", err)
+	}
+
+	result, err := svc.RunIssue(context.Background(), RunIssueRequest{
+		Repo:        repo,
+		IssueNumber: 42,
+	})
+	if err != nil {
+		t.Fatalf("RunIssue() error = %v", err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	attemptPath := filepath.Join(stateDir, "attempts", result.ID+".json")
+	if _, err := os.Stat(attemptPath); err != nil {
+		t.Fatalf("attempt file missing for %q after stale-lock take-over: %v", result.ID, err)
 	}
 }
 

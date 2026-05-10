@@ -58,6 +58,7 @@ var (
 	ErrIssueLabelExcluded       = errors.New("issue has excluded label")
 	ErrIssueMultipleModelLabels = errors.New("issue has multiple model recommendation labels")
 	ErrGitHubUnavailable        = errors.New("github client not configured")
+	ErrIssueWorkspaceBusy       = errors.New("issue workspace already locked")
 )
 
 type Config struct {
