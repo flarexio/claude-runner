@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 func TestBuildArgsUsesIssueOverride(t *testing.T) {
@@ -243,12 +245,12 @@ func TestGenerateDiffFromBaseRef(t *testing.T) {
 	workspaces := t.TempDir()
 	svc := &service{cfg: Config{WorkDir: workspaces}}
 
-	workDir, err := svc.prepareWorkDir(context.Background(), RunRequest{
+	workDir := filepath.Join(workspaces, "run")
+	if err := svc.prepareWorkDir(context.Background(), RunRequest{
 		Repo:    remote,
 		Ref:     "feature/review",
 		BaseRef: "main",
-	}, "run")
-	if err != nil {
+	}, workDir); err != nil {
 		t.Fatalf("prepareWorkDir() error = %v", err)
 	}
 
@@ -306,18 +308,16 @@ func TestRunRemovesClonedWorkDirAfterClaudeFailure(t *testing.T) {
 
 func TestPrepareWorkDirRemovesFailedClone(t *testing.T) {
 	workspaces := t.TempDir()
-	svc := &service{cfg: Config{WorkDir: workspaces}}
+	svc := &service{cfg: Config{WorkDir: workspaces}, log: zap.NewNop()}
 
-	workDir, err := svc.prepareWorkDir(context.Background(), RunRequest{
+	workDir := filepath.Join(workspaces, "run")
+	err := svc.prepareWorkDir(context.Background(), RunRequest{
 		Repo: filepath.Join(t.TempDir(), "missing.git"),
-	}, "run")
+	}, workDir)
 	if err == nil {
 		t.Fatal("prepareWorkDir() error = nil")
 	}
-	if workDir != "" {
-		t.Fatalf("workDir = %q, want empty", workDir)
-	}
-	if _, err := os.Stat(filepath.Join(workspaces, "run")); !os.IsNotExist(err) {
+	if _, err := os.Stat(workDir); !os.IsNotExist(err) {
 		t.Fatalf("failed clone workspace was not removed, stat err = %v", err)
 	}
 }
@@ -325,10 +325,10 @@ func TestPrepareWorkDirRemovesFailedClone(t *testing.T) {
 func newRemoteRepo(t *testing.T) string {
 	t.Helper()
 
-	remote := t.TempDir()
+	remote := shortTempDir(t)
 	runGit(t, "", "init", "--bare", remote)
 
-	src := t.TempDir()
+	src := shortTempDir(t)
 	runGit(t, "", "clone", remote, src)
 	runGit(t, src, "config", "user.email", "test@example.com")
 	runGit(t, src, "config", "user.name", "Test User")
@@ -342,6 +342,22 @@ func newRemoteRepo(t *testing.T) string {
 	runGit(t, src, "push", "origin", "main")
 
 	return remote
+}
+
+// shortTempDir is t.TempDir without the long test-name prefix. Issue-mode
+// tests duplicate the workspace path inside their stable task ID
+// (gh-issue-<owner>-<repo>-<n>) plus a /repo/ subdir, so cloning into a
+// t.TempDir() workspace can push deep .git/objects/... paths past Windows
+// MAX_PATH (260). The runner itself never produces paths that long; this
+// is purely a test-infra workaround.
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "cr")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
 }
 
 func prependFakeClaude(t *testing.T, exitCode int) {

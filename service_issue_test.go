@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -473,6 +474,95 @@ func TestBuildIssueFailureCommentOmitsPreservationWhenNotPreserved(t *testing.T)
 	}
 	if !strings.Contains(body, "Run ID: `01ABC`") {
 		t.Fatalf("body missing run id:\n%s", body)
+	}
+}
+
+func TestIssueTaskIDFormat(t *testing.T) {
+	got := issueTaskID("flarexio/claude-runner", 8)
+	if want := "gh-issue-flarexio-claude-runner-8"; got != want {
+		t.Fatalf("issueTaskID() = %q, want %q", got, want)
+	}
+}
+
+func TestRunIssueWritesStableLayout(t *testing.T) {
+	gh := &fakeGitHub{issue: validIssue()}
+	workspaces := t.TempDir()
+	// Force preservation so we can inspect the layout after a failed claude run.
+	svc := &service{cfg: Config{WorkDir: workspaces, Issue: EventConfig{PreserveOnFailure: true}}, log: zap.NewNop(), github: gh}
+
+	prependFakeClaude(t, 1)
+
+	repo := newRemoteRepo(t)
+	if _, err := svc.RunIssue(context.Background(), RunIssueRequest{
+		Repo:        repo,
+		IssueNumber: 42,
+	}); err != nil {
+		t.Fatalf("RunIssue() error = %v", err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	slug, err := NormalizeRepo(repo)
+	if err != nil {
+		t.Fatalf("NormalizeRepo: %v", err)
+	}
+	taskRoot := filepath.Join(workspaces, issueTaskID(slug, 42))
+	if _, err := os.Stat(taskRoot); err != nil {
+		t.Fatalf("task root missing: %v", err)
+	}
+	repoDir := filepath.Join(taskRoot, "repo")
+	if info, err := os.Stat(repoDir); err != nil || !info.IsDir() {
+		t.Fatalf("repo/ subdir missing: stat err=%v info=%v", err, info)
+	}
+	if _, err := os.Stat(filepath.Join(repoDir, ".git")); err != nil {
+		t.Fatalf(".git/ missing under repo/: %v", err)
+	}
+	// .claude-runner/ must not live inside the git worktree.
+	if _, err := os.Stat(filepath.Join(repoDir, ".claude-runner")); !os.IsNotExist(err) {
+		t.Fatalf(".claude-runner/ unexpectedly under repo/: stat err=%v", err)
+	}
+}
+
+func TestRunIssueTaskIDIsStableAcrossRetries(t *testing.T) {
+	gh := &fakeGitHub{issue: validIssue()}
+	workspaces := t.TempDir()
+	svc := &service{cfg: Config{WorkDir: workspaces, Issue: EventConfig{PreserveOnFailure: true}}, log: zap.NewNop(), github: gh}
+	prependFakeClaude(t, 1)
+
+	repo := newRemoteRepo(t)
+	if _, err := svc.RunIssue(context.Background(), RunIssueRequest{
+		Repo: repo, IssueNumber: 42,
+	}); err != nil {
+		t.Fatalf("RunIssue() #1 error = %v", err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close() #1 error = %v", err)
+	}
+
+	// Reset the fake GitHub so a fresh issue passes claim again.
+	gh = &fakeGitHub{issue: validIssue()}
+	svc.github = gh
+
+	if _, err := svc.RunIssue(context.Background(), RunIssueRequest{
+		Repo: repo, IssueNumber: 42,
+	}); err != nil {
+		t.Fatalf("RunIssue() #2 error = %v", err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatalf("Close() #2 error = %v", err)
+	}
+
+	entries, err := os.ReadDir(workspaces)
+	if err != nil {
+		t.Fatalf("read workspaces: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d workspace entries, want 1 stable task root: %v", len(entries), entries)
+	}
+	slug, _ := NormalizeRepo(repo)
+	if got, want := entries[0].Name(), issueTaskID(slug, 42); got != want {
+		t.Fatalf("workspace name = %q, want stable %q", got, want)
 	}
 }
 

@@ -72,15 +72,26 @@ func (svc *service) Run(ctx context.Context, req RunRequest) (*Result, error) {
 	return svc.runStateless(ctx, req)
 }
 
+// runStateless owns the CI / PR review lifecycle: per-run ULID workspace,
+// always cleaned up. Issue mode lives in runIssueExecution.
 func (svc *service) runStateless(ctx context.Context, req RunRequest) (*Result, error) {
-	result, _, err := svc.runClaudeInTemporaryWorkspace(ctx, req, runOptions{})
-	return result, err
-}
+	runID := ulid.Make().String()
 
-type runOptions struct {
-	// preserveOnFailure: keep the cloned workspace when claude exits non-zero
-	// so an operator can inspect. Only applies when req.Repo != "".
-	preserveOnFailure bool
+	workDir := svc.cfg.WorkDir
+	if req.Repo != "" {
+		workDir = filepath.Join(svc.cfg.WorkDir, runID)
+		if err := svc.prepareWorkDir(ctx, req, workDir); err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err := os.RemoveAll(workDir); err != nil {
+				svc.log.Warn("remove workspace", zap.String("work_dir", workDir), zap.Error(err))
+			}
+		}()
+	}
+
+	result, _, err := svc.execClaude(ctx, req, workDir, runID)
+	return result, err
 }
 
 type workspaceOutcome struct {
@@ -88,40 +99,22 @@ type workspaceOutcome struct {
 	preserved bool
 }
 
-func (svc *service) runClaudeInTemporaryWorkspace(ctx context.Context, req RunRequest, opts runOptions) (*Result, workspaceOutcome, error) {
-	id := ulid.Make().String()
-
-	workDir, err := svc.prepareWorkDir(ctx, req, id)
-	if err != nil {
-		return nil, workspaceOutcome{}, err
-	}
-
-	ws := workspaceOutcome{dir: workDir}
-	if req.Repo != "" {
-		defer func() {
-			if ws.preserved {
-				svc.log.Info("preserving failed issue workspace",
-					zap.String("work_dir", workDir),
-					zap.String("id", id))
-				return
-			}
-			if err := os.RemoveAll(workDir); err != nil {
-				svc.log.Warn("remove workspace", zap.String("work_dir", workDir), zap.Error(err))
-			}
-		}()
-	}
-
+// execClaude builds the diff (when applicable), composes the prompt, and runs
+// the claude CLI in workDir. It does not own the workspace; the caller's
+// lifecycle wrapper does. The bool return is true when claude exited non-zero.
+func (svc *service) execClaude(ctx context.Context, req RunRequest, workDir, runID string) (*Result, bool, error) {
 	var diff string
 	if req.BaseRef != "" {
+		var err error
 		diff, err = svc.generateDiff(ctx, req, workDir)
 		if err != nil {
-			return nil, ws, err
+			return nil, false, err
 		}
 	}
 
 	prompt, err := svc.preparePrompt(req, workDir, diff)
 	if err != nil {
-		return nil, ws, err
+		return nil, false, err
 	}
 
 	req.Prompt = prompt
@@ -134,23 +127,17 @@ func (svc *service) runClaudeInTemporaryWorkspace(ctx context.Context, req RunRe
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	result := &Result{ID: id}
-
-	if err := cmd.Run(); err != nil {
-		result.Output = stdout.String()
+	result := &Result{ID: runID}
+	runErr := cmd.Run()
+	result.Output = stdout.String()
+	if runErr != nil {
 		result.Error = stderr.String()
 		if result.Error == "" {
-			result.Error = err.Error()
+			result.Error = runErr.Error()
 		}
-		if opts.preserveOnFailure && req.Repo != "" {
-			ws.preserved = true
-		}
-		return result, ws, nil
+		return result, true, nil
 	}
-
-	result.Output = stdout.String()
-
-	return result, ws, nil
+	return result, false, nil
 }
 
 func (svc *service) buildArgs(req RunRequest) []string {
@@ -237,6 +224,7 @@ func (svc *service) preparePrompt(req RunRequest, workDir string, diff string) (
 	if diffPath != "" {
 		b.WriteString("- Diff file: claude-runner.diff\n")
 		b.WriteString("\nUse claude-runner.diff as the authoritative review scope. Review only changes shown in that diff unless the prompt explicitly asks otherwise.\n")
+		b.WriteString("When citing line numbers, use the Read tool on the file at HEAD to look them up; do not infer line numbers from diff hunk offsets.\n")
 	}
 
 	return b.String(), nil
@@ -265,12 +253,22 @@ func (svc *service) generateDiff(ctx context.Context, req RunRequest, workDir st
 	return stdout.String(), nil
 }
 
-func (svc *service) prepareWorkDir(ctx context.Context, req RunRequest, id string) (string, error) {
+func (svc *service) prepareWorkDir(ctx context.Context, req RunRequest, workDir string) error {
 	if req.Repo == "" {
-		return svc.cfg.WorkDir, nil
+		return nil
 	}
 
-	workDir := filepath.Join(svc.cfg.WorkDir, id)
+	// A leftover repo/ from a previous preserved-on-failure issue run would
+	// make git clone refuse the destination; stateless runs use unique ULIDs
+	// so this is a no-op for them.
+	if err := os.RemoveAll(workDir); err != nil {
+		return fmt.Errorf("clear stale workspace: %w", err)
+	}
+	if parent := filepath.Dir(workDir); parent != svc.cfg.WorkDir {
+		if err := os.MkdirAll(parent, 0o755); err != nil {
+			return fmt.Errorf("create workspace parent: %w", err)
+		}
+	}
 
 	args := []string{"clone"}
 	if req.BaseRef == "" {
@@ -283,12 +281,14 @@ func (svc *service) prepareWorkDir(ctx context.Context, req RunRequest, id strin
 	args = append(args, req.Repo, workDir)
 
 	cmd := exec.CommandContext(ctx, "git", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		if removeErr := os.RemoveAll(workDir); removeErr != nil {
 			svc.log.Warn("remove failed clone", zap.String("work_dir", workDir), zap.Error(removeErr))
 		}
-		return "", fmt.Errorf("git clone failed: %w", err)
+		return fmt.Errorf("git clone failed: %s: %w", strings.TrimSpace(stderr.String()), err)
 	}
 
-	return workDir, nil
+	return nil
 }

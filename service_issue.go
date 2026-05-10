@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/oklog/ulid/v2"
@@ -64,7 +65,7 @@ func (svc *service) runIssueWorkflow(ctx context.Context, req RunIssueRequest) (
 			zap.String("model", selectedModel),
 		)
 
-		result, ws, runErr := svc.runIssueExecution(bgCtx, exec)
+		result, ws, runErr := svc.runIssueExecution(bgCtx, exec, slug, req.IssueNumber)
 		if runErr != nil {
 			log.Error("issue execution failed", zap.Error(runErr))
 			svc.reportIssueFailure(bgCtx, slug, req.IssueNumber, issueFailureReport{
@@ -93,10 +94,46 @@ func (svc *service) runIssueWorkflow(ctx context.Context, req RunIssueRequest) (
 	}, nil
 }
 
-func (svc *service) runIssueExecution(ctx context.Context, req RunRequest) (*Result, workspaceOutcome, error) {
-	return svc.runClaudeInTemporaryWorkspace(ctx, req, runOptions{
-		preserveOnFailure: svc.cfg.Issue.PreserveOnFailure,
-	})
+// runIssueExecution owns the issue lifecycle: stable taskRoot/repo layout,
+// preserve-on-failure when configured, and a clean removal otherwise. The
+// task root is reserved for sibling runner metadata (.claude-runner/, future).
+func (svc *service) runIssueExecution(ctx context.Context, req RunRequest, slug string, issueNumber int) (*Result, workspaceOutcome, error) {
+	runID := ulid.Make().String()
+	taskRoot := filepath.Join(svc.cfg.WorkDir, issueTaskID(slug, issueNumber))
+	workDir := filepath.Join(taskRoot, "repo")
+
+	if err := svc.prepareWorkDir(ctx, req, workDir); err != nil {
+		return nil, workspaceOutcome{}, err
+	}
+
+	ws := workspaceOutcome{dir: taskRoot}
+	defer func() {
+		if ws.preserved {
+			svc.log.Info("preserving failed issue workspace",
+				zap.String("task_root", taskRoot),
+				zap.String("id", runID))
+			return
+		}
+		if err := os.RemoveAll(taskRoot); err != nil {
+			svc.log.Warn("remove workspace", zap.String("task_root", taskRoot), zap.Error(err))
+		}
+	}()
+
+	result, claudeFailed, err := svc.execClaude(ctx, req, workDir, runID)
+	if err != nil {
+		return nil, ws, err
+	}
+	if claudeFailed && svc.cfg.Issue.PreserveOnFailure {
+		ws.preserved = true
+	}
+	return result, ws, nil
+}
+
+// issueTaskID returns the stable workspace key for an issue task.
+// slug should be the normalized "owner/repo" form; "/" is replaced with "-"
+// without splitting, so a malformed slug yields a usable name instead of panicking.
+func issueTaskID(slug string, number int) string {
+	return fmt.Sprintf("gh-issue-%s-%d", strings.ReplaceAll(slug, "/", "-"), number)
 }
 
 func validateIssue(issue *Issue) error {
