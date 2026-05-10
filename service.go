@@ -81,22 +81,55 @@ func (svc *service) Run(ctx context.Context, req RunRequest) (*Result, error) {
 // jobs. It intentionally stays synchronous and uses a throwaway workspace when
 // a repository is supplied.
 func (svc *service) runStateless(ctx context.Context, req RunRequest) (*Result, error) {
-	return svc.runClaudeInTemporaryWorkspace(ctx, req)
+	result, _, err := svc.runClaudeInTemporaryWorkspace(ctx, req, runOptions{})
+	return result, err
+}
+
+// runOptions tunes the workspace lifecycle of runClaudeInTemporaryWorkspace.
+// The zero value matches the original behavior used by stateless / CI / PR
+// review runs (always remove the temporary workspace).
+type runOptions struct {
+	// preserveOnFailure keeps the cloned workspace intact when claude
+	// exits non-zero, so an operator can inspect the failed run. It only
+	// applies to repo-backed runs (req.Repo != ""); the existing-workspace
+	// path never owns its directory and is unaffected.
+	preserveOnFailure bool
+}
+
+// workspaceOutcome reports what happened to the temporary workspace when
+// runClaudeInTemporaryWorkspace returned. It is only meaningful for
+// repo-backed runs; for existing-workspace runs the workspace is the
+// configured WorkDir and is never owned by the helper.
+type workspaceOutcome struct {
+	dir       string
+	preserved bool
 }
 
 // runClaudeInTemporaryWorkspace clones (when needed), generates a diff (when
 // applicable), composes the final prompt, and runs claude. It is a lower-level
 // execution helper shared by the stateless path and the issue workflow's
 // background execution step.
-func (svc *service) runClaudeInTemporaryWorkspace(ctx context.Context, req RunRequest) (*Result, error) {
+//
+// The returned workspaceOutcome describes whether the cloned workspace was
+// preserved on the runner. Callers can use it for richer logging or failure
+// reporting; the helper itself owns the actual filesystem cleanup.
+func (svc *service) runClaudeInTemporaryWorkspace(ctx context.Context, req RunRequest, opts runOptions) (*Result, workspaceOutcome, error) {
 	id := ulid.Make().String()
 
 	workDir, err := svc.prepareWorkDir(ctx, req, id)
 	if err != nil {
-		return nil, err
+		return nil, workspaceOutcome{}, err
 	}
+
+	ws := workspaceOutcome{dir: workDir}
 	if req.Repo != "" {
 		defer func() {
+			if ws.preserved {
+				svc.log.Info("preserving failed issue workspace",
+					zap.String("work_dir", workDir),
+					zap.String("id", id))
+				return
+			}
 			if err := os.RemoveAll(workDir); err != nil {
 				svc.log.Warn("remove workspace", zap.String("work_dir", workDir), zap.Error(err))
 			}
@@ -107,13 +140,13 @@ func (svc *service) runClaudeInTemporaryWorkspace(ctx context.Context, req RunRe
 	if req.BaseRef != "" {
 		diff, err = svc.generateDiff(ctx, req, workDir)
 		if err != nil {
-			return nil, err
+			return nil, ws, err
 		}
 	}
 
 	prompt, err := svc.preparePrompt(req, workDir, diff)
 	if err != nil {
-		return nil, err
+		return nil, ws, err
 	}
 
 	req.Prompt = prompt
@@ -134,13 +167,15 @@ func (svc *service) runClaudeInTemporaryWorkspace(ctx context.Context, req RunRe
 		if result.Error == "" {
 			result.Error = err.Error()
 		}
-
-		return result, nil
+		if opts.preserveOnFailure && req.Repo != "" {
+			ws.preserved = true
+		}
+		return result, ws, nil
 	}
 
 	result.Output = stdout.String()
 
-	return result, nil
+	return result, ws, nil
 }
 
 func (svc *service) buildArgs(req RunRequest) []string {

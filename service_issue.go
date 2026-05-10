@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/oklog/ulid/v2"
@@ -73,15 +74,23 @@ func (svc *service) runIssueWorkflow(ctx context.Context, req RunIssueRequest) (
 			zap.String("model", selectedModel),
 		)
 
-		result, runErr := svc.runIssueExecution(bgCtx, exec)
+		result, ws, runErr := svc.runIssueExecution(bgCtx, exec)
 		if runErr != nil {
 			log.Error("issue execution failed", zap.Error(runErr))
-			svc.reportIssueFailure(bgCtx, slug, req.IssueNumber, runErr.Error())
+			svc.reportIssueFailure(bgCtx, slug, req.IssueNumber, issueFailureReport{
+				runID:  runID,
+				detail: runErr.Error(),
+				ws:     ws,
+			})
 			return
 		}
 		if result.Error != "" {
 			log.Warn("claude reported error", zap.String("error", result.Error))
-			svc.reportIssueFailure(bgCtx, slug, req.IssueNumber, result.Error)
+			svc.reportIssueFailure(bgCtx, slug, req.IssueNumber, issueFailureReport{
+				runID:  runID,
+				detail: result.Error,
+				ws:     ws,
+			})
 			return
 		}
 		log.Info("issue completed")
@@ -94,8 +103,10 @@ func (svc *service) runIssueWorkflow(ctx context.Context, req RunIssueRequest) (
 	}, nil
 }
 
-func (svc *service) runIssueExecution(ctx context.Context, req RunRequest) (*Result, error) {
-	return svc.runClaudeInTemporaryWorkspace(ctx, req)
+func (svc *service) runIssueExecution(ctx context.Context, req RunRequest) (*Result, workspaceOutcome, error) {
+	return svc.runClaudeInTemporaryWorkspace(ctx, req, runOptions{
+		preserveOnFailure: svc.cfg.Issue.PreserveOnFailure,
+	})
 }
 
 func validateIssue(issue *Issue) error {
@@ -177,16 +188,65 @@ func (svc *service) reportIssueSuccess(ctx context.Context, repo string, number 
 	}
 }
 
-func (svc *service) reportIssueFailure(ctx context.Context, repo string, number int, errSummary string) {
+// issueFailureReport carries the context reportIssueFailure needs to write
+// an actionable, sanitized failure comment.
+type issueFailureReport struct {
+	// runID is the workflow-level run id used in server logs. Including
+	// it in the comment lets an operator correlate the failure with the
+	// runner's logs without exposing host paths.
+	runID string
+	// detail is the raw error / stderr from claude. It is sanitized
+	// before being posted.
+	detail string
+	// ws describes the cloned workspace; ws.preserved is mentioned in
+	// the comment when true so reporters know an inspectable copy lives
+	// on the runner. The path itself is never posted publicly.
+	ws workspaceOutcome
+}
+
+func (svc *service) reportIssueFailure(ctx context.Context, repo string, number int, report issueFailureReport) {
 	if err := svc.github.AddLabels(ctx, repo, number, []string{LabelAgentFailed}); err != nil {
 		svc.log.Warn("add agent-failed", zap.Error(err),
 			zap.String("repo", repo), zap.Int("issue_number", number))
 	}
-	body := "claude-runner failed to complete this task.\n\n" + summarize(errSummary)
+	body := buildIssueFailureComment(report, svc.cfg.WorkDir)
 	if err := svc.github.CreateComment(ctx, repo, number, body); err != nil {
 		svc.log.Warn("comment failure", zap.Error(err),
 			zap.String("repo", repo), zap.Int("issue_number", number))
 	}
+}
+
+func buildIssueFailureComment(report issueFailureReport, workRoot string) string {
+	var b strings.Builder
+	b.WriteString("claude-runner failed to complete this task.\n\n")
+	if report.runID != "" {
+		fmt.Fprintf(&b, "- Run ID: `%s`\n", report.runID)
+	}
+	if report.ws.preserved {
+		b.WriteString("- Workspace preserved on the runner; ask an operator to inspect with the run ID above.\n")
+	}
+	if report.runID != "" || report.ws.preserved {
+		b.WriteString("\n")
+	}
+	b.WriteString(summarize(sanitizeFailureDetail(report.detail, workRoot, report.ws.dir)))
+	return b.String()
+}
+
+// sanitizeFailureDetail strips host-local details we don't want to expose
+// when posting failure comments on public issues. It is best-effort
+// redaction (not a security boundary) and intentionally narrow: the
+// workspace clone path and the runner's home directory.
+func sanitizeFailureDetail(s, workRoot, workDir string) string {
+	if workDir != "" {
+		s = strings.ReplaceAll(s, workDir, "<workspace>")
+	}
+	if workRoot != "" {
+		s = strings.ReplaceAll(s, workRoot, "<workspace-root>")
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		s = strings.ReplaceAll(s, home, "~")
+	}
+	return s
 }
 
 func buildIssuePrompt(repo string, issue *Issue) string {

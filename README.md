@@ -91,6 +91,16 @@ If you prefer a curated tool list, set `bypassPermissions: false` and
 spell out `issue.allowedTools` (Issue mode needs `Edit` and `Write` to
 implement tasks, which the top-level fallback list does not include).
 
+`issue.preserveOnFailure` controls whether the cloned workspace under
+`workDir` is kept when the claude run exits non-zero, so an operator can
+inspect the failed run and re-trigger after fixing the issue. It defaults
+to `true` because the failed workspace is usually the best debugging
+artifact for an async issue run; set `issue.preserveOnFailure: false` to
+opt out and clean up failed issue workspaces too. Successful issue runs
+still clean up, and CI / PR review cleanup behavior is unchanged. The
+failure comment posted on the issue mentions the preserved workspace
+alongside the run id, but never the host path.
+
 ## Execution Modes
 
 claude-runner exposes two operations on its Service: `Run` (prompt / PR
@@ -142,8 +152,10 @@ The API call returns here with `{id, status: accepted}`. Background:
 9. Builds the prompt from the issue body and runs `claude -p` with the
    selected model, when one was selected (Claude is instructed to implement
    the task, not merge PRs, and report the tests it ran)
-10. On success: posts a summary comment. On failure: adds `agent-failed` and
-    posts a failure comment. The clone is removed either way.
+10. On success: posts a summary comment and removes the clone. On failure:
+    adds `agent-failed` and posts a failure comment containing the run id;
+    the clone is kept under `workDir` for inspection by default, and is
+    removed only when `issue.preserveOnFailure: false` is set explicitly.
 
 Claude is instructed to open a pull request for review and not to merge
 it; the runner never auto-merges PRs. The issue closes through the
