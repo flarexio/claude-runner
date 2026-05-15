@@ -406,10 +406,10 @@ func TestRunIssuePreservesWorkspaceOnFailureWhenExplicitlyEnabled(t *testing.T) 
 	}
 }
 
-func TestRunIssueRemovesWorkspaceOnSuccessEvenWithPreserveOnFailure(t *testing.T) {
+func TestRunIssuePreservesWorkspaceOnSuccess(t *testing.T) {
 	gh := &fakeGitHub{issue: validIssue()}
 	workspaces := t.TempDir()
-	svc := &service{cfg: Config{WorkDir: workspaces, Issue: EventConfig{PreserveOnFailure: true}}, log: zap.NewNop(), github: gh}
+	svc := &service{cfg: Config{WorkDir: workspaces}, log: zap.NewNop(), github: gh}
 
 	prependFakeClaude(t, 0)
 
@@ -427,9 +427,8 @@ func TestRunIssueRemovesWorkspaceOnSuccessEvenWithPreserveOnFailure(t *testing.T
 	if err != nil {
 		t.Fatalf("read workspaces: %v", err)
 	}
-	if len(entries) != 0 {
-		t.Fatalf("expected successful run to clean up workspace, got %d entries: %v",
-			len(entries), entries)
+	if len(entries) == 0 {
+		t.Fatal("expected preserved workspace on success, found none")
 	}
 }
 
@@ -798,11 +797,88 @@ func TestBuildIssuePromptIncludesContext(t *testing.T) {
 		"Add feature X",
 		"Please implement feature X",
 		"open a pull request",
+		"Do not stop after producing only a plan",
+		"Do not ask for approval to begin implementation in issue mode",
 		"Do not merge any pull requests",
 		"Run the relevant tests",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+func TestCleanupIssueRemovesWorkspace(t *testing.T) {
+	workspaces := t.TempDir()
+	svc := &service{cfg: Config{WorkDir: workspaces}, log: zap.NewNop()}
+	taskRoot := filepath.Join(workspaces, issueTaskID("owner/repo", 42))
+	if err := os.MkdirAll(taskRoot, 0o755); err != nil {
+		t.Fatalf("create task root: %v", err)
+	}
+
+	result, err := svc.CleanupIssue(context.Background(), CleanupIssueRequest{Repo: "owner/repo", IssueNumber: 42})
+	if err != nil {
+		t.Fatalf("CleanupIssue() error = %v", err)
+	}
+	if !strings.Contains(result.Output, "cleaned up") {
+		t.Fatalf("result.Output = %q, want cleaned up", result.Output)
+	}
+	if _, err := os.Stat(taskRoot); !os.IsNotExist(err) {
+		t.Fatalf("task root still exists after cleanup, stat err = %v", err)
+	}
+}
+
+func TestCleanupIssueNoopWhenNotFound(t *testing.T) {
+	svc := &service{cfg: Config{WorkDir: t.TempDir()}, log: zap.NewNop()}
+	result, err := svc.CleanupIssue(context.Background(), CleanupIssueRequest{Repo: "owner/repo", IssueNumber: 42})
+	if err != nil {
+		t.Fatalf("CleanupIssue() error = %v", err)
+	}
+	if !strings.Contains(result.Output, "not found") {
+		t.Fatalf("result.Output = %q, want not found", result.Output)
+	}
+}
+
+func TestCleanupIssueSkipsLockedWorkspace(t *testing.T) {
+	workspaces := t.TempDir()
+	svc := &service{cfg: Config{WorkDir: workspaces}, log: zap.NewNop()}
+	taskRoot := filepath.Join(workspaces, issueTaskID("owner/repo", 42))
+	stateDir := filepath.Join(taskRoot, stateDirName)
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("create state dir: %v", err)
+	}
+	writeLock(t, stateDir, workspaceLock{AttemptID: "01RUNNING", PID: os.Getpid(), StartedAt: time.Now().UTC()})
+
+	result, err := svc.CleanupIssue(context.Background(), CleanupIssueRequest{Repo: "owner/repo", IssueNumber: 42})
+	if err != nil {
+		t.Fatalf("CleanupIssue() error = %v", err)
+	}
+	if !strings.Contains(result.Output, "cleanup skipped") {
+		t.Fatalf("result.Output = %q, want cleanup skipped", result.Output)
+	}
+	if _, err := os.Stat(taskRoot); err != nil {
+		t.Fatalf("task root should remain, stat err = %v", err)
+	}
+}
+
+func TestCleanupIssueCleansUpStaleLockedWorkspace(t *testing.T) {
+	workspaces := t.TempDir()
+	svc := &service{cfg: Config{WorkDir: workspaces}, log: zap.NewNop()}
+	taskRoot := filepath.Join(workspaces, issueTaskID("owner/repo", 42))
+	stateDir := filepath.Join(taskRoot, stateDirName)
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("create state dir: %v", err)
+	}
+	writeLock(t, stateDir, workspaceLock{AttemptID: "01STALE", PID: os.Getpid(), StartedAt: time.Now().UTC().Add(-2 * staleLockTTL)})
+
+	result, err := svc.CleanupIssue(context.Background(), CleanupIssueRequest{Repo: "owner/repo", IssueNumber: 42})
+	if err != nil {
+		t.Fatalf("CleanupIssue() error = %v", err)
+	}
+	if !strings.Contains(result.Output, "cleaned up") {
+		t.Fatalf("result.Output = %q, want cleaned up", result.Output)
+	}
+	if _, err := os.Stat(taskRoot); !os.IsNotExist(err) {
+		t.Fatalf("task root still exists after stale cleanup, stat err = %v", err)
 	}
 }

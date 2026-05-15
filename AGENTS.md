@@ -29,16 +29,17 @@ Tests that need to invoke `claude` shell out to a fake binary that the helpers i
 
 The service is a single Go module (`github.com/flarexio/claude-runner`) implementing the layering described in the README: `Service → Middleware (logging) → Endpoint → Transport (NATS / HTTP)`. The pattern follows the project-wide convention: endpoints map 1:1 to `Service` methods, no event dispatch happens at the endpoint or transport layer, async work lives inside the `Service`, and the CLI subcommand goes through `Service` (not a separate code path).
 
-### Two operations, two endpoints
+### Operations and endpoints
 
-The `Service` interface (`service.go`) exposes exactly two methods, and `EndpointSet` (`endpoint.go`) wires each to its own transport route:
+The `Service` interface (`service.go`) exposes distinct methods, and `EndpointSet` (`endpoint.go`) wires each to its own transport route:
 
-| Service method | HTTP route        | NATS subject suffix | Behavior                                                  |
-| -------------- | ----------------- | ------------------- | --------------------------------------------------------- |
-| `Run`          | `POST /api/run`   | `run`               | Synchronous prompt / PR review                            |
-| `RunIssue`     | `POST /api/run-issue` | `run-issue`     | Sync validate+claim → goroutine for execute → `accepted`  |
+| Service method | HTTP route             | NATS subject suffix | Behavior                                                 |
+| -------------- | ---------------------- | ------------------- | -------------------------------------------------------- |
+| `Run`          | `POST /api/run`        | `run`               | Synchronous prompt / PR review                           |
+| `RunIssue`     | `POST /api/run-issue`  | `run-issue`         | Sync validate+claim → goroutine for execute → `accepted` |
+| `CleanupIssue` | `POST /api/cleanup-issue` | `cleanup-issue` | Cleanup preserved issue workspace after `issues.closed`  |
 
-Request types are distinct (`RunRequest` vs `RunIssueRequest`); clients pick the endpoint, the server never branches on `event` to choose an endpoint. When adding a new operation, add a new `Service` method + `Endpoint` + transport route — do **not** overload an existing endpoint with event dispatch.
+Request types are distinct (`RunRequest`, `RunIssueRequest`, `CleanupIssueRequest`); clients pick the endpoint, the server never branches on `event` to choose an endpoint. When adding a new operation, add a new `Service` method + `Endpoint` + transport route — do **not** overload an existing endpoint with event dispatch.
 
 ### Run vs RunIssue: sync-claim, async-execute
 
@@ -62,7 +63,7 @@ Issue mode prompts are **always built server-side** by `buildIssuePrompt` from t
 The two modes have different lifecycles, owned by separate functions in `service.go`. They share only the leaf helper `execClaude(ctx, req, workDir, runID)`, which builds the diff (when applicable), composes the prompt, runs `claude` in `workDir`, and returns the result plus a `claudeFailed` bool. `execClaude` does **not** own the workspace — the caller's lifecycle wrapper does.
 
 - **Stateless / CI / PR review** (`runStateless`): per-run ULID, flat — `workDir = <cfg.WorkDir>/<ulid>`. Always cleaned up. When `req.Repo == ""` (existing-workspace mode), `workDir = cfg.WorkDir` and the function never removes it.
-- **Issue execution** (`runIssueExecution`, in `service_issue.go`): stable layout — `taskRoot = <cfg.WorkDir>/<issueTaskID>` where `issueTaskID = gh-issue-<owner>-<repo>-<n>`, `workDir = <taskRoot>/repo`, runner metadata in `<taskRoot>/.claude-runner/` (sibling to `repo/`, outside the Git worktree). Cleanup operates on `taskRoot`, so metadata is wiped together with the worktree on a successful run. The `attemptID` passed in from `runIssueWorkflow` is the same value reported as "Run ID" in the failure comment, so it matches `attempts/<attempt-id>.json` on disk.
+- **Issue execution** (`runIssueExecution`, in `service_issue.go`): stable layout — `taskRoot = <cfg.WorkDir>/<issueTaskID>` where `issueTaskID = gh-issue-<owner>-<repo>-<n>`, `workDir = <taskRoot>/repo`, runner metadata in `<taskRoot>/.claude-runner/` (sibling to `repo/`, outside the Git worktree). Successful issue runs preserve `taskRoot` for operator inspection; `CleanupIssue` removes that task root later when an `issues.closed` event is delivered. The `attemptID` passed in from `runIssueWorkflow` is the same value reported as "Run ID" in the failure comment, so it matches `attempts/<attempt-id>.json` on disk.
 
 When adding issue-specific behavior (state files, resume, PR finalizer), put it in `runIssueExecution` (or a deeper helper it calls). Do **not** thread it through `execClaude` — the architecture goal is to keep the CI / PR review path from accumulating issue-mode complexity (per #4).
 

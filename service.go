@@ -18,6 +18,7 @@ type Service interface {
 	Close() error
 	Run(ctx context.Context, req RunRequest) (*Result, error)
 	RunIssue(ctx context.Context, req RunIssueRequest) (*Result, error)
+	CleanupIssue(ctx context.Context, req CleanupIssueRequest) (*Result, error)
 }
 
 type ServiceMiddleware func(Service) Service

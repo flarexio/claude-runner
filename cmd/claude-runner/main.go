@@ -144,8 +144,9 @@ func serve(ctx context.Context, cmd *cli.Command) error {
 	svc = runner.LoggingMiddleware(logger)(svc)
 
 	endpoints := runner.EndpointSet{
-		Run:      runner.RunEndpoint(svc),
-		RunIssue: runner.RunIssueEndpoint(svc),
+		Run:          runner.RunEndpoint(svc),
+		RunIssue:     runner.RunIssueEndpoint(svc),
+		CleanupIssue: runner.CleanupIssueEndpoint(svc),
 	}
 
 	// NATS Transport

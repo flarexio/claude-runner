@@ -14,6 +14,7 @@ func AddRouters(r *gin.Engine, endpoints runner.EndpointSet) {
 
 	api.POST("/run", endpointHandler[runner.RunRequest](endpoints.Run))
 	api.POST("/run-issue", endpointHandler[runner.RunIssueRequest](endpoints.RunIssue))
+	api.POST("/cleanup-issue", endpointHandler[runner.CleanupIssueRequest](endpoints.CleanupIssue))
 }
 
 func endpointHandler[T any](ep endpoint.Endpoint) gin.HandlerFunc {

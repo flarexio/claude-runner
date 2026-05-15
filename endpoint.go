@@ -8,8 +8,9 @@ import (
 )
 
 type EndpointSet struct {
-	Run      endpoint.Endpoint
-	RunIssue endpoint.Endpoint
+	Run          endpoint.Endpoint
+	RunIssue     endpoint.Endpoint
+	CleanupIssue endpoint.Endpoint
 }
 
 type RunRequest struct {
@@ -25,6 +26,11 @@ type RunRequest struct {
 type RunIssueRequest struct {
 	Repo        string `json:"repo"`
 	Ref         string `json:"ref,omitempty"`
+	IssueNumber int    `json:"issue_number"`
+}
+
+type CleanupIssueRequest struct {
+	Repo        string `json:"repo"`
 	IssueNumber int    `json:"issue_number"`
 }
 
@@ -51,5 +57,15 @@ func RunIssueEndpoint(svc Service) endpoint.Endpoint {
 			return nil, errors.New("invalid request type")
 		}
 		return svc.RunIssue(ctx, req)
+	}
+}
+
+func CleanupIssueEndpoint(svc Service) endpoint.Endpoint {
+	return func(ctx context.Context, request any) (any, error) {
+		req, ok := request.(CleanupIssueRequest)
+		if !ok {
+			return nil, errors.New("invalid request type")
+		}
+		return svc.CleanupIssue(ctx, req)
 	}
 }

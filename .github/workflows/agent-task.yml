@@ -2,11 +2,11 @@ name: Agent Task
 
 on:
   issues:
-    types: [labeled]
+    types: [labeled, closed]
 
 jobs:
   agent:
-    if: github.event.label.name == 'agent-ready'
+    if: github.event.action == 'labeled' && github.event.label.name == 'agent-ready'
     runs-on: ubuntu-latest
     steps:
       - name: Run Claude on issue
@@ -26,4 +26,27 @@ jobs:
             echo "# Claude Issue Run" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             cat claude-output.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  cleanup:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cleanup Claude issue workspace
+        uses: flarexio/claude-runner@v1
+        with:
+          event: issue-closed
+          repo: ${{ github.server_url }}/${{ github.repository }}.git
+          issue-number: ${{ github.event.issue.number }}
+          nats-creds-content: ${{ secrets.NATS_CREDS }}
+          edge-id: ${{ secrets.EDGE_ID }}
+          output-file: claude-cleanup-output.md
+
+      - name: Add cleanup output to summary
+        if: always()
+        run: |
+          if [ -f claude-cleanup-output.md ]; then
+            echo "# Claude Issue Workspace Cleanup" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            cat claude-cleanup-output.md >> "$GITHUB_STEP_SUMMARY"
           fi

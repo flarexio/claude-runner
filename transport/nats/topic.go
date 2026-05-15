@@ -9,4 +9,5 @@ import (
 func AddEndpoints(group micro.Group, endpoints runner.EndpointSet) {
 	group.AddEndpoint("run", EndpointHandler[runner.RunRequest](endpoints.Run))
 	group.AddEndpoint("run-issue", EndpointHandler[runner.RunIssueRequest](endpoints.RunIssue))
+	group.AddEndpoint("cleanup-issue", EndpointHandler[runner.CleanupIssueRequest](endpoints.CleanupIssue))
 }

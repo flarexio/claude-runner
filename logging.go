@@ -70,3 +70,20 @@ func (mw *loggingMiddleware) RunIssue(ctx context.Context, req RunIssueRequest) 
 	log.Info("issue accepted", zap.String("id", result.ID))
 	return result, nil
 }
+
+func (mw *loggingMiddleware) CleanupIssue(ctx context.Context, req CleanupIssueRequest) (*Result, error) {
+	log := mw.log.With(
+		zap.String("action", "cleanup_issue"),
+		zap.String("repo", req.Repo),
+		zap.Int("issue_number", req.IssueNumber),
+	)
+
+	result, err := mw.next.CleanupIssue(ctx, req)
+	if err != nil {
+		log.Error(err.Error())
+		return nil, err
+	}
+
+	log.Info("cleanup completed", zap.String("output", result.Output))
+	return result, nil
+}

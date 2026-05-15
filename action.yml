@@ -6,7 +6,7 @@ inputs:
     description: Transport type (nats or http)
     default: nats
   prompt:
-    description: Prompt to send (required unless event is "issue")
+    description: Prompt to send (required unless event is "issue" or "issue-closed")
   repo:
     description: Repository URL
   ref:
@@ -18,7 +18,7 @@ inputs:
   pr-number:
     description: Pull request number
   issue-number:
-    description: Issue number (used when event is "issue")
+    description: Issue number (used when event is "issue" or "issue-closed")
   nats-url:
     description: NATS server URL
     default: wss://nats.flarex.io

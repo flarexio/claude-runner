@@ -100,6 +100,38 @@ func (svc *service) runIssueWorkflow(ctx context.Context, req RunIssueRequest) (
 	}, nil
 }
 
+func (svc *service) CleanupIssue(ctx context.Context, req CleanupIssueRequest) (*Result, error) {
+	slug, err := NormalizeRepo(req.Repo)
+	if err != nil {
+		return nil, err
+	}
+	if req.IssueNumber <= 0 {
+		return nil, ErrInvalidIssueNumber
+	}
+
+	taskID := issueTaskID(slug, req.IssueNumber)
+	taskRoot := filepath.Join(svc.cfg.WorkDir, taskID)
+	stateDir := filepath.Join(taskRoot, stateDirName)
+	lockPath := filepath.Join(stateDir, lockFileName)
+
+	if _, err := os.Stat(taskRoot); os.IsNotExist(err) {
+		return &Result{Output: fmt.Sprintf("Issue workspace %s not found; nothing to clean up.", taskID)}, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("stat issue workspace: %w", err)
+	}
+
+	if lock, err := readWorkspaceLock(lockPath); err == nil && time.Since(lock.StartedAt) < staleLockTTL {
+		return &Result{Output: fmt.Sprintf("Issue workspace %s is locked by attempt %s; cleanup skipped.", taskID, lock.AttemptID)}, nil
+	} else if err != nil && !os.IsNotExist(err) {
+		svc.log.Warn("cleanup issue workspace with unreadable lock", zap.String("lock", lockPath), zap.Error(err))
+	}
+
+	if err := os.RemoveAll(taskRoot); err != nil {
+		return nil, fmt.Errorf("remove issue workspace: %w", err)
+	}
+	return &Result{Output: fmt.Sprintf("Issue workspace %s cleaned up.", taskID)}, nil
+}
+
 type issueAttempt struct {
 	slug        string
 	issueNumber int
@@ -166,7 +198,7 @@ func (svc *service) runIssueExecution(ctx context.Context, req RunRequest, attem
 		releaseWorkspaceLock(stateDir, svc.log)
 
 		if ws.preserved {
-			svc.log.Info("preserving failed issue workspace",
+			svc.log.Info("preserving issue workspace",
 				zap.String("task_root", taskRoot),
 				zap.String("id", attempt.attemptID))
 			return
@@ -203,6 +235,7 @@ func (svc *service) runIssueExecution(ctx context.Context, req RunRequest, attem
 		return result, ws, nil
 	}
 	rec.Status = statusCompleted
+	ws.preserved = true
 	return result, ws, nil
 }
 
@@ -354,6 +387,8 @@ func buildIssuePrompt(repo string, issue *Issue) string {
 	b.WriteString(issue.Body)
 	b.WriteString("\n\nInstructions:\n")
 	b.WriteString("- Implement the task described in the issue and open a pull request for review.\n")
+	b.WriteString("- Do not stop after producing only a plan; implement the change in this run.\n")
+	b.WriteString("- Do not ask for approval to begin implementation in issue mode.\n")
 	b.WriteString("- Do not merge any pull requests.\n")
 	b.WriteString("- Run the relevant tests after your changes and report which commands you ran and the outcomes in your final summary.\n")
 	b.WriteString("- Keep changes scoped to what the issue asks for.\n")

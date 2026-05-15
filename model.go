@@ -7,7 +7,8 @@ import (
 )
 
 const (
-	EventIssue = "issue"
+	EventIssue       = "issue"
+	EventIssueClosed = "issue-closed"
 
 	IssueMarker = "<!-- agent-task:v1 -->"
 

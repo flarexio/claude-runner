@@ -31,7 +31,7 @@ func main() {
 			},
 			&cli.StringFlag{
 				Name:    "prompt",
-				Usage:   "Prompt to send (required unless --event=issue)",
+				Usage:   "Prompt to send (required unless --event=issue or issue-closed)",
 				Sources: cli.EnvVars("PROMPT"),
 			},
 			&cli.StringFlag{
@@ -117,9 +117,15 @@ func run(ctx context.Context, cmd *cli.Command) error {
 			IssueNumber: cmd.Int("issue-number"),
 		}
 		subject = "run-issue"
+	} else if event == runner.EventIssueClosed {
+		payload = runner.CleanupIssueRequest{
+			Repo:        cmd.String("repo"),
+			IssueNumber: cmd.Int("issue-number"),
+		}
+		subject = "cleanup-issue"
 	} else {
 		if cmd.String("prompt") == "" {
-			return fmt.Errorf("--prompt is required unless --event=issue")
+			return fmt.Errorf("--prompt is required unless --event=issue or issue-closed")
 		}
 		payload = runner.RunRequest{
 			Prompt:   cmd.String("prompt"),
